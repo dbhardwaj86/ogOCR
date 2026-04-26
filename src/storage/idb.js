@@ -139,6 +139,64 @@ export async function blobToDataURL(blob) {
   return `data:${mime};base64,${b64}`;
 }
 
+// ── Compile-block image keyspace ─────────────────────────────────────────
+// Compile blocks of kind `image` (added via "send to compile") historically
+// embedded a `data:` URL in `block.src`, which round-tripped through
+// localStorage and could overflow the 5 MB quota the same way session
+// images did pre-v4. The v1 → v2 compile migration offloads each such
+// block's bytes here under a `cimg_<id>` key so `block.src` becomes a
+// short reference like `idb:cimg_<id>`. Separate keyspace from session
+// images (which use raw image ids) so collisions are impossible.
+const COMPILE_IMAGE_PREFIX = 'cimg_';
+
+function compileImageKey(id) {
+  // Accept either a raw id ("abc123") or an already-prefixed id ("cimg_abc123")
+  // so callers using helpers like `'cimg_' + newId()` and callers passing the
+  // bare id behave the same.
+  return id.startsWith(COMPILE_IMAGE_PREFIX) ? id : COMPILE_IMAGE_PREFIX + id;
+}
+
+// Store a compile-block image. Accepts a `data:` URL string or a Blob.
+// Surfaces IDB_QUOTA / IDB_INIT_FAIL on failure (same shape as setImage).
+export async function setCompileImage(id, dataUriOrBlob) {
+  const blob = typeof dataUriOrBlob === 'string'
+    ? await dataURLToBlob(dataUriOrBlob)
+    : dataUriOrBlob;
+  if (!blob) {
+    const err = new Error('setCompileImage: invalid input (not a data URL or Blob).');
+    err.code = 'IDB_INIT_FAIL';
+    throw err;
+  }
+  try {
+    await idbSet(compileImageKey(id), blob, store());
+  } catch (e) {
+    if (isQuotaError(e)) throw wrapError(e, 'IDB_QUOTA');
+    throw wrapError(e, 'IDB_INIT_FAIL');
+  }
+}
+
+// Retrieve a compile-block image as a Blob. Returns null when missing.
+export async function getCompileImage(id) {
+  try {
+    const value = await idbGet(compileImageKey(id), store());
+    if (value == null) return null;
+    return value;
+  } catch (e) {
+    if (e?.code === 'IDB_INIT_FAIL') return null;
+    throw wrapError(e, 'IDB_INIT_FAIL');
+  }
+}
+
+// Best-effort delete; mirrors `deleteImage` semantics.
+export async function deleteCompileImage(id) {
+  try {
+    await idbDel(compileImageKey(id), store());
+  } catch (e) {
+    if (e?.code === 'IDB_INIT_FAIL') return;
+    console.warn('idb deleteCompileImage failed:', e);
+  }
+}
+
 // Helper: parse a `data:` URL into a Blob. Used by the v3 → v4 migration
 // to lift legacy embedded image bytes out of localStorage and into IDB.
 export async function dataURLToBlob(dataURL) {

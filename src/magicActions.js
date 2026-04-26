@@ -170,3 +170,33 @@ export function stripDetectedLang(text) {
   if (typeof text !== 'string') return text;
   return text.replace(DETECTED_LANG_TRAILING_RE, '');
 }
+
+// Track K — language override re-run. When the user picks a language in
+// LanguagePill, the next `runAction` call wraps the action's prompt with
+// this helper so Gemini (a) treats the document as written in the chosen
+// language and (b) keeps emitting the trailing `__detected_lang:` line so
+// the pill keeps rendering after the override lands. Passing `auto` (or
+// any falsy value) returns the basePrompt unchanged — LanguagePill uses
+// `auto` as the "clear override" sentinel.
+export const LANGUAGE_OVERRIDE_NAMES = Object.freeze({
+  en: 'English',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  zh: 'Chinese',
+  ja: 'Japanese',
+});
+
+export function LANGUAGE_OVERRIDE_PROMPT(basePrompt, lang) {
+  const base = typeof basePrompt === 'string' ? basePrompt : '';
+  if (!lang || lang === 'auto') return base;
+  const name = LANGUAGE_OVERRIDE_NAMES[lang];
+  if (!name) return base;
+  // Prepend the language constraint and append the detected_lang directive
+  // so override responses still flow through `parseDetectedLang` and update
+  // the pill (the `(override)` suffix is owned by the LanguagePill prop, not
+  // the prompt — Gemini just keeps echoing the iso code we forced).
+  const prefix = `Treat the document as written in ${name}. Output nothing in any other language. `;
+  const suffix = `\n\nAt the very end, on its own line, output: __detected_lang: ${lang}`;
+  return prefix + base + suffix;
+}

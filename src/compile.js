@@ -9,10 +9,25 @@
 //
 // `compile.blocks` is the source of truth for ordering. Each block has its
 // own id (generated locally) so reordering is a simple list mutation.
+//
+// Schema:
+//   v1 — initial layout (Sprint 2.2).
+//   v2 — image blocks no longer carry a `data:` URL in `block.src`. Bytes
+//        live in IndexedDB (see `src/storage/idb.js#setCompileImage`); the
+//        block stores a short reference like `idb:cimg_<id>`. Mirrors the
+//        v3 → v4 session-image migration. Run `hydrateCompileImages` (data
+//        URI form) or `resolveCompileImageObjectUrls` (object URL form)
+//        before exporting / rendering. The migration is idempotent —
+//        running it twice on a v2 compile is a no-op.
 
 import { sanitizeSvg } from './svgSanitize';
+import {
+  setCompileImage,
+  getCompileImage,
+  blobToDataURL,
+} from './storage/idb';
 
-export const COMPILE_SCHEMA_VERSION = 1;
+export const COMPILE_SCHEMA_VERSION = 2;
 export const COMPILE_STORAGE_KEY = 'ogOCR_compiles';
 export const ACTIVE_COMPILE_KEY = 'ogOCR_active_compile';
 
@@ -49,11 +64,132 @@ export function createCompile({ name = 'Untitled compile', theme = 'paper' } = {
 export function migrateCompile(c) {
   if (!c || typeof c !== 'object') return null;
   if (c.version === COMPILE_SCHEMA_VERSION) return c;
+  // v1 → v2: stamp the version. The actual offload of `data:` image bytes
+  // out of `block.src` and into IDB is performed by `migrateCompileImagesToIDB`
+  // (async) which the App calls once after mount. Keeping the sync migration
+  // free of IO mirrors the v3 → v4 session-image pattern in App.jsx — a
+  // synchronous IDB write would block the initial render.
   return {
     ...createCompile({ name: c.name }),
     ...c,
     version: COMPILE_SCHEMA_VERSION,
   };
+}
+
+// True if the compile holds at least one image block whose `src` is still
+// an inline `data:` URL — i.e. needs to be lifted into IDB. Used by App.jsx
+// to decide whether the async migration step is worth running.
+export function compileNeedsIDBOffload(compile) {
+  if (!compile || !Array.isArray(compile.blocks)) return false;
+  return compile.blocks.some(b =>
+    b && b.kind === BLOCK_KINDS.IMAGE
+      && typeof b.src === 'string'
+      && b.src.startsWith('data:')
+  );
+}
+
+// Async migration: walk image blocks, push each `data:` URI into IDB under a
+// fresh `cimg_<id>` key, and rewrite `block.src` to `idb:cimg_<id>` so the
+// localStorage payload no longer carries the bytes. Idempotent: blocks
+// already wearing an `idb:` ref are skipped, and re-running on a fully
+// migrated compile is a no-op (returns the same compile reference).
+//
+// On per-block IDB failure the offending block keeps its data URL so the
+// compile keeps rendering; the failure is logged but does not abort the
+// whole batch. Quota errors bubble up so the App can surface IDB_QUOTA.
+export async function migrateCompileImagesToIDB(compile) {
+  if (!compile || !Array.isArray(compile.blocks)) return compile;
+  if (!compileNeedsIDBOffload(compile)) return compile;
+
+  let changed = false;
+  const nextBlocks = [];
+  for (const b of compile.blocks) {
+    if (
+      !b
+      || b.kind !== BLOCK_KINDS.IMAGE
+      || typeof b.src !== 'string'
+      || !b.src.startsWith('data:')
+    ) {
+      nextBlocks.push(b);
+      continue;
+    }
+    const cimgId = newId('cimg');
+    try {
+      await setCompileImage(cimgId, b.src);
+      nextBlocks.push({ ...b, src: 'idb:' + cimgId });
+      changed = true;
+    } catch (e) {
+      // Re-throw quota so the App can route IDB_QUOTA to the user; otherwise
+      // log and keep the inline data URL so the block still renders.
+      if (e?.code === 'IDB_QUOTA') throw e;
+      console.warn('compile image IDB offload failed for block', b.id, e);
+      nextBlocks.push(b);
+    }
+  }
+  if (!changed) return compile;
+  return { ...compile, blocks: nextBlocks };
+}
+
+// Helper: pull a `cimg_<id>` out of an `idb:cimg_<id>` reference. Returns
+// null when the input isn't an IDB reference.
+function parseIdbRef(src) {
+  if (typeof src !== 'string' || !src.startsWith('idb:')) return null;
+  return src.slice(4);
+}
+
+// Rebuild a compile with all `idb:` image refs resolved back into inline
+// `data:` URLs. Used by export paths (Save .md / Save .html / Save .docx)
+// so the output is self-contained and JSON-serializable. Returns a deep
+// copy — the input is never mutated. Missing IDB entries become null
+// `block.src` entries; the export-time helpers `compileToMarkdown` /
+// `compileToHtml` already render those as "[Image not loaded]".
+export async function hydrateCompileImages(compile) {
+  if (!compile || !Array.isArray(compile.blocks)) return compile;
+  const blocks = await Promise.all(compile.blocks.map(async (b) => {
+    if (!b || b.kind !== BLOCK_KINDS.IMAGE) return { ...b };
+    const ref = parseIdbRef(b.src);
+    if (!ref) return { ...b };
+    try {
+      const blob = await getCompileImage(ref);
+      if (!blob) return { ...b, src: null };
+      const dataURL = await blobToDataURL(blob);
+      return { ...b, src: dataURL };
+    } catch (e) {
+      console.warn('hydrateCompileImages failed for block', b.id, e);
+      return { ...b, src: null };
+    }
+  }));
+  return { ...compile, blocks };
+}
+
+// Rebuild a compile with all `idb:` image refs replaced by **object URLs**
+// (via `URL.createObjectURL`). Cheaper than data URLs for in-memory render
+// because the bytes never get re-serialized. **Caller is responsible for
+// revoking** each returned object URL when the render is unmounted —
+// otherwise the blob is pinned in memory for the page's lifetime.
+export async function resolveCompileImageObjectUrls(compile) {
+  if (!compile || !Array.isArray(compile.blocks)) return compile;
+  const blocks = await Promise.all(compile.blocks.map(async (b) => {
+    if (!b || b.kind !== BLOCK_KINDS.IMAGE) return { ...b };
+    const ref = parseIdbRef(b.src);
+    if (!ref) return { ...b };
+    try {
+      const blob = await getCompileImage(ref);
+      if (!blob) return { ...b, src: null };
+      // Guard for SSR / test environments where URL.createObjectURL is
+      // missing — fall back to the data URL form so callers still get a
+      // usable src instead of a broken one.
+      if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        const dataURL = await blobToDataURL(blob);
+        return { ...b, src: dataURL };
+      }
+      return { ...b, src: URL.createObjectURL(blob) };
+    } catch (e) {
+      console.warn('resolveCompileImageObjectUrls failed for block', b.id, e);
+      return { ...b, src: null };
+    }
+  }));
+  return { ...compile, blocks };
 }
 
 export function touchCompile(compile) {
@@ -131,6 +267,18 @@ function blockToMarkdown(block, sessions) {
     }
     case BLOCK_KINDS.IMAGE: {
       const cap = block.caption || 'Image';
+      // Defensive: if the block still wears an `idb:` ref we lost the race
+      // with hydration. Render the placeholder so the export still goes
+      // through, and warn so the bug is visible during development.
+      if (typeof block.src === 'string' && block.src.startsWith('idb:')) {
+        console.warn(
+          'compileToMarkdown: image block ' + (block.id || '?')
+            + ' still references IDB (' + block.src
+            + '). Call hydrateCompileImages() before exporting.'
+        );
+        return `![${cap}](#)\n\n_[Image not loaded]_`;
+      }
+      if (!block.src) return `_[Image not loaded]_`;
       return `![${cap}](${block.src})`;
     }
     case BLOCK_KINDS.PAGE_BREAK:
@@ -206,10 +354,29 @@ function blockToHtml(block, sessions) {
         .join('')}</div>`;
     case BLOCK_KINDS.SVG:
       return `<figure>${sanitizeSvg(block.svg || '')}</figure>`;
-    case BLOCK_KINDS.IMAGE:
+    case BLOCK_KINDS.IMAGE: {
+      // Defensive: same fallback as compileToMarkdown — if an `idb:` ref
+      // slipped through, render a placeholder rather than emitting a broken
+      // `<img src="idb:cimg_…">`. Hydration should have happened upstream.
+      if (typeof block.src === 'string' && block.src.startsWith('idb:')) {
+        console.warn(
+          'compileToHtml: image block ' + (block.id || '?')
+            + ' still references IDB (' + block.src
+            + '). Call hydrateCompileImages() before exporting.'
+        );
+        return `<figure><em>[Image not loaded]</em>${
+          block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''
+        }</figure>`;
+      }
+      if (!block.src) {
+        return `<figure><em>[Image not loaded]</em>${
+          block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''
+        }</figure>`;
+      }
       return `<figure><img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.caption || '')}">${
         block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''
       }</figure>`;
+    }
     case BLOCK_KINDS.PAGE_BREAK:
       return '<div class="compile-pagebreak"></div>';
     case BLOCK_KINDS.SESSION: {
