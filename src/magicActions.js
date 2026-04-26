@@ -10,60 +10,66 @@ const DETECTED_LANG_DIRECTIVE =
 // The 8 magic actions. Each row's `id`, `prompt`, and `endpoint` are the
 // wire-compat contract with the existing server endpoints — do not rename
 // or change those values without coordinating with server/index.js.
+//
+// `tier` segments the grid into the verbs a first-time user actually needs
+// (`primary`: text, table, math) versus the niche outputs (`overflow`).
+// Today the renderer surfaces the field as a `data-tier` attribute so the
+// design migration can collapse overflow into a "More…" popover without
+// touching this contract or the runAction wiring.
 export const MAGIC_ACTIONS = [
   {
     id: 'text', group: 'Text', label: 'Extract Text',
     hint: 'Plain prose, paragraphs preserved',
-    glyph: 'T', key: 'T',
+    glyph: 'T', key: 'T', tier: 'primary',
     endpoint: '/api/extract',
     prompt: 'Extract all text from this image accurately. Maintain paragraphs. Return strictly markdown.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'handwriting', group: 'Text', label: 'Clean Handwriting',
     hint: 'Transcribe + fix obvious errors',
-    glyph: 'H', key: 'H',
+    glyph: 'H', key: 'H', tier: 'overflow',
     endpoint: '/api/extract',
     prompt: 'This is a handwritten note. Transcribe it perfectly, fixing any obvious spelling errors, and format it nicely in markdown.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'table', group: 'Structure', label: 'Format as Table',
     hint: 'Tabular data → markdown table',
-    glyph: '▦', key: 'B',
+    glyph: '▦', key: 'B', tier: 'primary',
     endpoint: '/api/extract',
     prompt: 'Extract the data from this image and format it perfectly as a markdown table.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'actions', group: 'Structure', label: 'Extract Actions',
     hint: 'Pull tasks into a checklist',
-    glyph: '✓', key: 'A',
+    glyph: '✓', key: 'A', tier: 'overflow',
     endpoint: '/api/extract',
     prompt: 'Read this document and extract a list of actionable items or tasks. Format them as a markdown checklist.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'math', group: 'Symbol', label: 'Math to LaTeX',
     hint: 'Equations → compile-ready LaTeX',
-    glyph: '∑', key: 'M',
+    glyph: '∑', key: 'M', tier: 'primary',
     endpoint: '/api/extract',
     prompt: 'Extract the handwritten math equations from this document and output compile-ready LaTeX code. Do not include markdown code blocks, just the raw LaTeX.',
   },
   {
     id: 'mermaid', group: 'Symbol', label: 'Diagram → Mermaid',
     hint: 'Flowchart → Mermaid.js code',
-    glyph: '◇', key: 'D',
+    glyph: '◇', key: 'D', tier: 'overflow',
     endpoint: '/api/extract',
     prompt: 'Convert the flowchart or diagram in this image into valid Mermaid.js markdown code. Return strictly the Mermaid code block.',
   },
   {
     id: 'sketch', group: 'Visual', label: 'Sketch → SVG',
     hint: 'Hand drawing → editable SVG',
-    glyph: '✎', key: 'S',
+    glyph: '✎', key: 'S', tier: 'overflow',
     endpoint: '/api/sketch-to-svg',
     prompt: null,
   },
   {
     id: 'images', group: 'Visual', label: 'Extract Images',
     hint: 'Pull all figures with descriptions',
-    glyph: '▣', key: 'I',
+    glyph: '▣', key: 'I', tier: 'overflow',
     endpoint: '/api/extract-images',
     prompt: null,
   },

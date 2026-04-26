@@ -37,6 +37,7 @@ function MagicActions({ file, processing, onRun, hasRefineableText }) {
                   <button
                     key={a.id}
                     className={'og-tile' + (running ? ' is-running' : '')}
+                    data-tier={a.tier || 'primary'}
                     disabled={disabled}
                     onClick={() => onRun(a.id)}
                     title={a.hint}

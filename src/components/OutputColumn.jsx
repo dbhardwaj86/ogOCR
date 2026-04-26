@@ -56,6 +56,7 @@ function OutputColumn({
   onCancel,
   onRetry,
   onDismissError,
+  sessionCount = 0,
 }) {
   const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
@@ -172,9 +173,16 @@ function OutputColumn({
             >Equation</button>
           )}
           <button
-            className="og-pill og-pill-secondary"
+            className={'og-pill og-pill-secondary' + (sessionCount < 2 ? ' is-dim' : '')}
             onClick={onCompile}
-            title="Compile all sessions into a printable worksheet"
+            // Worksheet stacks 2+ sessions into a printable artifact. Keep it
+            // visible on session #1 (so users discover it exists) but dim it
+            // via .is-dim until there's actually something to stack — pure
+            // visual cue, click handler stays live for power users.
+            title={sessionCount < 2
+              ? 'Compile is most useful with 2+ sessions — keep extracting to stack them.'
+              : 'Compile all sessions into a printable worksheet'}
+            style={sessionCount < 2 ? { opacity: 0.5 } : undefined}
           >Worksheet</button>
         </div>
       </div>

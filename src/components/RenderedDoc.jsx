@@ -154,10 +154,12 @@ function MermaidEditor({ initialCode, onChange }) {
         ) : svg ? (
           <div
             className="og-mermaid-preview"
-            // Mermaid renders trusted SVG from user-controlled text.  This is
-            // the same risk envelope as the existing svgSanitize path; keep
-            // it inside the diagram pane only.
-            dangerouslySetInnerHTML={{ __html: svg }}
+            // Mermaid output is user-influenced (the Mermaid source comes from
+            // either Gemini or the editor textarea), so route it through the
+            // same DOMPurify gate the rest of the SVG render path uses —
+            // strips foreignObject/script/iframe + on* event handlers that
+            // Mermaid may emit verbatim from labels.
+            dangerouslySetInnerHTML={{ __html: sanitizeSvg(svg) }}
           />
         ) : (
           <div className="og-mermaid-preview og-mermaid-preview--empty">Rendering…</div>
