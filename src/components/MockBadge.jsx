@@ -15,7 +15,7 @@ function MockBadge() {
   }, []);
 
   if (!status) return null;
-  const mocks = ['email', 'drive', 'classroom'].filter(k => status[k] === 'mock');
+  const mocks = ['email', 'drive', 'classroom', 'docx'].filter(k => status[k] === 'mock');
   if (mocks.length === 0) return null;
 
   return (

@@ -13,14 +13,12 @@ import {
   compileToMarkdown,
   compileToHtml,
   compileSummary,
+  hydrateCompileImages,
 } from '../compile';
 import CompilePalette from './CompilePalette';
 import CompileBlockCard from './CompileBlockCard';
 import { showError, showInfo } from '../errors/showError';
 import { exportDocx } from '../exportDocx';
-
-// REMOVE_AT_MERGE Track J stub — Track K provides real hydrateCompileImages
-const hydrateCompileImages = (c) => c;
 
 function downloadBlob(content, filename, type) {
   const blob = new Blob([content], { type });
@@ -149,7 +147,7 @@ function CompileBuilder({
   const handleSaveDocx = useCallback(async () => {
     if (!activeCompile) return;
     try {
-      const hydrated = hydrateCompileImages(activeCompile);
+      const hydrated = await hydrateCompileImages(activeCompile);
       const md = compileToMarkdown(hydrated, sessions);
       await exportDocx({
         markdown: md,
