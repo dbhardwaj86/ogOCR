@@ -331,16 +331,9 @@ kbd, code { font-family: var(--mono); }
   padding: 24px;
 }
 
-.og-tablets { display: flex; gap: 0; }
-.og-tablet {
-  display: flex; flex-direction: column; gap: 1px;
-  padding: 4px 12px;
-  border-left: 1px solid var(--rule);
-  font-family: var(--mono); font-size: 10px;
-}
-.og-tablet:first-child { border-left: 0; }
-.og-tablet-k { color: var(--ink-faint); letter-spacing: 0.12em; }
-.og-tablet-v { color: var(--ink); font-weight: 500; }
+/* .og-tablets / .og-tablet were the SourceTablets surface; deleted with the
+   component (Track C). Per-token confidence is Sprint 3 territory and will
+   bring its own surface back. */
 
 .og-source-stage {
   flex: 1;
@@ -878,6 +871,58 @@ kbd, code { font-family: var(--mono); }
 .og-export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .og-export-glyph { font-family: var(--serif); font-size: 14px; color: var(--ink-soft); }
 .og-export-btn:hover:not(:disabled) .og-export-glyph { color: var(--accent); }
+
+/* Drive folder input + recent dropdown — sits inline next to Drive button. */
+.og-drive-folder { position: relative; display: inline-flex; }
+.og-drive-folder-input {
+  font-family: var(--mono); font-size: 11px;
+  padding: 5px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  width: 160px;
+  letter-spacing: 0.04em;
+  transition: border-color var(--tx-fast) ease;
+}
+.og-drive-folder-input:focus { outline: none; border-color: var(--accent); }
+.og-drive-folder-input::placeholder { color: var(--ink-faint); }
+.og-drive-folder-menu {
+  position: absolute; top: calc(100% + 2px); left: 0;
+  z-index: 30;
+  list-style: none; margin: 0; padding: 2px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  min-width: 100%;
+  box-shadow: 0 8px 20px oklch(from var(--ink) l c h / 0.10);
+}
+.og-drive-folder-item {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: 0;
+  padding: 5px 8px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.og-drive-folder-item:hover { background: var(--bg-tint); color: var(--accent-ink); }
+
+/* Inline filename rename input (Output column head). */
+.og-output-rename {
+  font-family: var(--mono); font-size: 11px;
+  padding: 3px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-soft); letter-spacing: 0.05em;
+  min-width: 120px; max-width: 220px;
+  transition: border-color var(--tx-fast) ease, background var(--tx-fast) ease, color var(--tx-fast) ease;
+}
+.og-output-rename:hover:not(:focus) {
+  border-color: var(--rule); background: var(--bg-card);
+}
+.og-output-rename:focus {
+  outline: none; border-color: var(--accent);
+  background: var(--bg-card); color: var(--ink);
+}
+.og-output-rename::placeholder { color: var(--ink-faint); }
 
 /* prompt dock (no preset chips per user direction) */
 .og-prompt {
@@ -1648,7 +1693,6 @@ kbd, code { font-family: var(--mono); }
   .og-session-body { display: none; }
   .og-section-title > span:not(.og-section-num) { display: none; }
   .og-section-count { display: none; }
-  .og-tablets { display: none; }
   .og-action-group-tiles { grid-template-columns: 1fr; }
 }
 
@@ -1981,7 +2025,6 @@ kbd, code { font-family: var(--mono); }
   /* Source pane: lined paper preview shrinks; magic actions in 2-col grid */
   .og-source-head { padding: 12px 14px; }
   .og-source-stage { padding: 16px; }
-  .og-tablets { display: none; }
   .og-action-group-tiles { grid-template-columns: 1fr 1fr; }
 
   /* Output pane: flex column. Canvas grows; foot is a fixed-budget strip

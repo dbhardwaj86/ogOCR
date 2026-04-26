@@ -22,6 +22,7 @@ import {
   createCompile as makeCompile,
   migrateCompile,
 } from './compile';
+import { readSessionParam, urlWithoutSessionParam, resolveSessionId } from './deepLink';
 
 // --- Initial-state loaders run once at module load (Strict Mode safe). ---
 function readJSON(key, fallback) {
@@ -59,6 +60,20 @@ const initialSessions = (() => {
 const initialActiveId = (() => {
   try { return localStorage.getItem('ogOCR_active_session') || null; } catch { return null; }
 })();
+// Deep-link override: a `?session=<id>` query param trumps the persisted
+// active id when it resolves against an existing session. Resolved at module
+// load so the initial render already shows the right session — no flash, no
+// in-effect setState. See docs in `src/deepLink.js`.
+const deepLinkSessionId = (() => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const id = readSessionParam(window.location.search);
+    return resolveSessionId(initialSessions, id);
+  } catch {
+    return null;
+  }
+})();
+const bootActiveId = deepLinkSessionId || initialActiveId;
 const initialPrompt = (() => {
   try { return localStorage.getItem('ogOCR_prompt') || ''; } catch { return ''; }
 })();
@@ -91,7 +106,7 @@ function pickInitialMobilePane(sessions, activeId) {
 
 function App() {
   const [sessions, setSessions] = useState(initialSessions);
-  const [activeSessionId, setActiveSessionId] = useState(initialActiveId);
+  const [activeSessionId, setActiveSessionId] = useState(bootActiveId);
   const [file, setFile] = useState(null);
   const [customPrompt, setCustomPrompt] = useState(initialPrompt);
   const [theme, setTheme] = useState(initialTheme);
@@ -101,7 +116,11 @@ function App() {
   const [compileOpen, setCompileOpen] = useState(false);
   const [pendingPreviewFile, setPendingPreviewFile] = useState(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [mobilePane, setMobilePane] = useState(() => pickInitialMobilePane(initialSessions, initialActiveId));
+  // Deep-link → output: if the URL targeted a real session, jump straight to
+  // the Output pane on mobile so the user sees their work, not the upload card.
+  const [mobilePane, setMobilePane] = useState(() => (
+    deepLinkSessionId ? 'output' : pickInitialMobilePane(initialSessions, initialActiveId)
+  ));
   const [compiles, setCompiles] = useState(initialCompiles);
   const [activeCompileId, setActiveCompileId] = useState(() => {
     if (!initialActiveCompileId) return null;
@@ -178,6 +197,20 @@ function App() {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('ogOCR_theme', theme); } catch { /* ignore */ }
   }, [theme]);
+
+  // Deep-link boot: the `?session=<id>` param has already been consumed at
+  // module load — it resolved into `bootActiveId` / `deepLinkSessionId` above
+  // and is reflected in the initial state. This effect just strips the param
+  // from the address bar so a refresh doesn't re-activate. Always strips,
+  // even on a miss, so a stale id can't get stuck on the URL.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.location.search.includes('session=')) return;
+    try {
+      const next = urlWithoutSessionParam(window.location.pathname, window.location.search);
+      window.history.replaceState(null, '', next);
+    } catch { /* ignore — non-browser or sandboxed context */ }
+  }, []);
 
   const cycleTheme = useCallback(() => {
     setTheme(t => nextTheme(t));
@@ -583,7 +616,6 @@ function App() {
           file={file}
           processing={processing}
           onRun={runAction}
-          showTablets={false}
         />
         <ErrorBoundary>
           <OutputColumn
