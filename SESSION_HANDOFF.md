@@ -1,8 +1,9 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27
+**Last updated:** 2026-04-27 (post-Run-2 review fixes)
 **Plan file:** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
+**Latest review pass:** `C:\Users\abc\.claude\plans\brainstorm-and-analyze-this-warm-fiddle.md` (Run 2, Findings A/B/C/D)
 
 This is the live status of the 3-sprint implementation pass landing the [REVIEW_REPORT.md](REVIEW_REPORT.md) recommendations (key rotation excluded). Read this first when resuming. Then check the plan file for full sprint scope.
 
@@ -11,8 +12,31 @@ This is the live status of the 3-sprint implementation pass landing the [REVIEW_
 1. Read this file (`SESSION_HANDOFF.md`).
 2. Read [REVIEW_REPORT.md](REVIEW_REPORT.md) for the original audit context.
 3. Read `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md` for full sprint scope, file lists, and verification steps.
-4. Check the **Next steps** section below — pick up at the first ☐ task.
+4. Check the **Pending user review** section below first — that's the freshest unverified work.
 5. Run `npm run lint && npm run test && npm run dev` to confirm baseline before changing anything.
+
+## Pending user review (Run-2 review fixes — 2026-04-27 night)
+
+Three commits landed on top of `f091c13` (Sprint 3 start). Pre-merge verification: `npm run lint` clean, **109/109** tests pass, `npm run build` clean (entry chunk 538 KB; pdf.worker 2.1 MB, pdf 405 KB, xlsx 425 KB all in lazy chunks).
+
+| Commit | Title | Key changes |
+|---|---|---|
+| `d8f7497` | Adversarial review (run 2): TableBlock state updaters + batched-drop action | Findings A + C + D from the Run-2 review. New `BatchActionPrompt.jsx`. |
+| `7a4a4be` | Server hardening + dev-port fallback + smoke tests | API_PORT (default 3003), log-injection guard, constant-time auth compare, multer `.any()`, MIME allowlist, Drive Buffer wrap, 7 supertest smoke files. |
+| `fdf7e39` | UX polish: action tier metadata, Worksheet pill dim, Mermaid sanitize | `tier` field on `MAGIC_ACTIONS`, dim Worksheet pill until ≥2 sessions, route Mermaid SVG through `sanitizeSvg`. |
+
+**Browser smoke (run after `taskkill //F //IM node.exe && npm run dev` — pick from this list):**
+
+1. **Finding A (TableBlock):** extract a doc with a markdown table → editable grid renders → instrument the parent `onChange` (or watch React DevTools for parent re-renders) → confirm exactly **one** parent update per cell edit / header rename / sort / add row / add col. Pre-fix this fired twice in Strict Mode (which Vite enables by default in dev).
+2. **Finding D (BatchActionPrompt):** drop 3 mixed-type files (image + PDF + image) on UploadCard → confirm modal opens listing the 3 filenames + sizes → click `Math to LaTeX` → all 3 enqueue with `actionId: 'math'` → DevTools Network tab shows `POST /api/extract` for each with the math prompt body. Cancel path: drop 3 files → click Cancel → no enqueue, no toast spam.
+3. **Finding D regression:** drop a single file → confirm `UploadConfirmModal` (single-file path) is unchanged.
+4. **Finding D > 20 files:** drop 25 files → existing `QUEUE_OVERFLOW` toast still wins (validation order preserved).
+5. **Finding C (CLAUDE.md):** read the Gotchas section in `CLAUDE.md`. Confirm the carve-out wording reads cleanly: prohibition still applies to extraction path; preview-only thumbnail rendering is explicitly allowed.
+6. **Server hardening:** API smoke — `curl http://localhost:3003/api/_status` (server now on 3003 by default) → 200; `curl -H "User-Agent: foo$(printf '\\r\\n')bar" http://localhost:3003/api/_status` → server logs show no injected line break. With `OG_API_TOKEN=secret` set: bad token returns AUTH_INVALID; correct token passes (constant-time compare).
+7. **UX polish:** session count = 1 → Worksheet pill dimmed with hint "Compile is most useful with 2+ sessions"; session count ≥ 2 → bright. Action tiles each carry `data-tier` (inspect element to verify).
+8. **Mermaid sanitize:** paste a fenced ` ```mermaid ` block whose label contains `<script>alert(1)</script>` → mermaid renders without executing the script (sanitizeSvg strips it).
+
+**Push state:** branch `main` is now **34 commits ahead of origin/main**. The user has not yet pushed; review/push at their discretion.
 
 ---
 
