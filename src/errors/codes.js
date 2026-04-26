@@ -229,6 +229,17 @@ export const ERRORS = Object.freeze({
   SIG_QUOTA: entry('SIG_QUOTA', SURFACE.TOAST, SEVERITY.ERROR,
     "Couldn't save signature — storage is full.",
     'Free up some space by clearing old sessions or signatures.'),
+
+  // ── Auth / rate limit (mirror server/errors.js) ─────────────────────
+  AUTH_REQUIRED: entry('AUTH_REQUIRED', SURFACE.MODAL, SEVERITY.ERROR,
+    'API token required.',
+    'This server is gated — set X-OG-Token in your client (matches OG_API_TOKEN in .env).'),
+  AUTH_INVALID: entry('AUTH_INVALID', SURFACE.MODAL, SEVERITY.ERROR,
+    'API token rejected.',
+    'Check the token against the server configuration and retry.'),
+  RATE_LIMITED: entry('RATE_LIMITED', SURFACE.TOAST, SEVERITY.WARN,
+    'Too many requests.',
+    'Slow down for a minute, then try again.'),
 });
 
 export function getError(code) {

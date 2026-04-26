@@ -20,8 +20,12 @@ describe('errFromResponse', () => {
     expect(codeFromException(err)).toBe('OCR_ABORTED');
   });
 
-  it('maps 504 to OCR_TIMEOUT and 401 to EXP_DRIVE_AUTH_EXPIRED', () => {
+  it('maps 504 to OCR_TIMEOUT and 401 to AUTH_REQUIRED', () => {
+    // Bare 401 (no body envelope) defaults to AUTH_REQUIRED, not the
+    // Drive-specific code — the Drive route always supplies its own code in
+    // the body, and a generic 401 should not steer users into Drive bootstrap.
     expect(codeFromHttpStatus(504)).toBe('OCR_TIMEOUT');
-    expect(codeFromHttpStatus(401)).toBe('EXP_DRIVE_AUTH_EXPIRED');
+    expect(codeFromHttpStatus(401)).toBe('AUTH_REQUIRED');
+    expect(codeFromHttpStatus(403)).toBe('AUTH_INVALID');
   });
 });

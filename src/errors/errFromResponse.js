@@ -5,7 +5,12 @@
 import { getError, formatMessage } from './codes';
 
 export function codeFromHttpStatus(status) {
-  if (status === 401) return 'EXP_DRIVE_AUTH_EXPIRED';
+  // 401 used to default to EXP_DRIVE_AUTH_EXPIRED, which sent users hitting
+  // the auth-token gate on /api/email or /api/extract to a "Run npm run
+  // bootstrap-drive" dialog. The Drive route always supplies the code in
+  // the body, so a bare-401 fallback is more honestly AUTH_REQUIRED.
+  if (status === 401) return 'AUTH_REQUIRED';
+  if (status === 403) return 'AUTH_INVALID';
   if (status === 413) return 'CAP_FILE_TOO_LARGE';
   if (status === 415) return 'CAP_BAD_MIME';
   if (status === 429) return 'OCR_QUOTA';

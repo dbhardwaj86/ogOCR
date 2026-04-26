@@ -25,12 +25,24 @@ if (!process.env.GEMINI_API_KEY) {
 }
 
 const app = express();
-const port = 3001;
+// API_PORT lets the dev server hop ports if 3001 is held by an orphan node
+// process from a previous run (the Windows-restart gotcha documented in
+// CLAUDE.md). Vite's proxy reads the same env so they always agree.
+const port = Number(process.env.API_PORT) || 3003;
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 2000;
 const GEMINI_TIMEOUT_MS = 600_000;
 const TIMEOUT_MARKER = 'Gemini request timed out';
+// Mirror UploadCard.jsx's `^(image\/|application\/pdf$)/` regex — the
+// server should reject obvious garbage (text/plain, application/zip,
+// application/x-msdownload renamed to .png) without rejecting valid image
+// types the client happily accepts (image/jpg from older browsers,
+// image/heic from iPhones, image/gif, image/bmp). The /api/extract-images
+// route still needs the stricter allowlist because sharp can only crop a
+// known subset.
+const ALLOWED_INPUT_RE = /^(image\/|application\/pdf$)/;
+function isAllowedInputMime(mime) { return typeof mime === 'string' && ALLOWED_INPUT_RE.test(mime); }
 const ALLOWED_EXTRACT_IMAGES_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -55,9 +67,20 @@ app.use(cors({
 
 // Diagnostic: log every request's method/path/origin/UA. Useful when debugging
 // why a particular device (e.g. an Android phone) sees "failed to fetch".
+// Strip CR/LF/ANSI escapes from any user-influenced string before logging — an
+// attacker who controls UA or Origin headers must not be able to inject fake
+// log lines that mislead an ops engineer during incident response. The ESC
+// (0x1b) byte is built via fromCharCode so the source file stays plain ASCII
+// and lint's no-control-regex doesn't trip.
+const LOG_STRIP_RE = new RegExp('[\\r\\n' + String.fromCharCode(0x1b) + ']', 'g');
+function safeLog(s) {
+  return String(s ?? '').replace(LOG_STRIP_RE, ' ').slice(0, 200);
+}
+
 app.use((req, _res, next) => {
-  const ua = (req.headers['user-agent'] || '').slice(0, 80);
-  console.log(`[req] ${req.method} ${req.path} ← origin=${req.headers.origin || '-'} ua="${ua}"`);
+  const ua = safeLog(req.headers['user-agent']).slice(0, 80);
+  const origin = safeLog(req.headers.origin) || '-';
+  console.log(`[req] ${req.method} ${req.path} ← origin=${origin} ua="${ua}"`);
   next();
 });
 
@@ -104,7 +127,13 @@ app.use('/api', (req, res, next) => {
   if (!expected) return next();
   const got = req.header('x-og-token');
   if (!got) return sendError(res, 'AUTH_REQUIRED');
-  if (got !== expected) return sendError(res, 'AUTH_INVALID');
+  // Constant-time compare. Bail on length mismatch first because
+  // timingSafeEqual throws if buffer lengths differ.
+  const a = Buffer.from(got);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return sendError(res, 'AUTH_INVALID');
+  }
   return next();
 });
 
@@ -133,6 +162,12 @@ function uploadSemaphore(req, res, next) {
 // server still handles only the first file in the batch per response, so the
 // per-request memory footprint matches the single-file path. Aggregate cap is
 // 20 * MAX_UPLOAD_BYTES = 200 MiB.
+//
+// Routes use `.any()` so both wire shapes — `file` (singular, from
+// runAction) and `files` (plural, from the queue runner) — go through the
+// same handler without multer rejecting the unrecognized field with
+// LIMIT_UNEXPECTED_FILE. `pickUploadedFile` reads from `req.files[0]`
+// regardless.
 const MAX_BATCH_FILES = 20;
 const uploadArray = multer({
   storage: multer.memoryStorage(),
@@ -223,6 +258,9 @@ function sanitizeDriveFilename(name) {
     .replace(/[/\\]/g, '')
     .split('\x00').join('')
     .replace(BIDI_RE, '')
+    // Strip " and ; — both can break out of Content-Disposition: attachment;
+    // filename="…" if echoed via the export-docx route.
+    .replace(/["';]/g, '')
     .trim()
     .slice(0, 255);
   return cleaned || 'ogOCR_Document.txt';
@@ -322,12 +360,16 @@ async function resolveDriveFolder(segments) {
   return parentId;
 }
 
-app.post('/api/extract', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
+app.post('/api/extract', ocrLimiter, uploadSemaphore, uploadArray.any(), async (req, res) => {
   try {
     const file = pickUploadedFile(req);
     const { prompt } = req.body;
 
     if (!file) return sendError(res, 'CAP_NO_FILE');
+    if (file.size === 0) return sendError(res, 'CAP_NO_FILE', { message: 'File is empty.' });
+    if (!isAllowedInputMime(file.mimetype)) {
+      return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type — upload an image or PDF.' });
+    }
     if (prompt !== undefined && typeof prompt !== 'string') {
       return sendError(res, 'OCR_BAD_PROMPT', { message: 'Prompt must be a string.' });
     }
@@ -425,7 +467,9 @@ app.post('/api/save-drive', async (req, res) => {
       const mimeType = mimeForFilename(safeName);
       const created = await driveClient.files.create({
         requestBody: { name: safeName, parents: [folderId] },
-        media: { mimeType, body: Readable.from(text) },
+        // Wrap as a UTF-8 Buffer so multi-byte chars (CJK/emoji) get the
+        // correct byte length if any middleware pre-computes Content-Length.
+        media: { mimeType, body: Readable.from(Buffer.from(text, 'utf8')) },
         fields: 'id, webViewLink',
       });
       return created.data;
@@ -474,10 +518,14 @@ app.post('/api/classroom/draft', (req, res) => {
   res.on('close', () => clearTimeout(timer));
 });
 
-app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
+app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.any(), async (req, res) => {
   try {
     const file = pickUploadedFile(req);
     if (!file) return sendError(res, 'CAP_NO_FILE');
+    if (file.size === 0) return sendError(res, 'CAP_NO_FILE', { message: 'File is empty.' });
+    if (!isAllowedInputMime(file.mimetype)) {
+      return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type — upload an image or PDF.' });
+    }
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
     const imageParts = [{ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }];
@@ -498,10 +546,11 @@ app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.array('f
   }
 });
 
-app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
+app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.any(), async (req, res) => {
   try {
     const file = pickUploadedFile(req);
     if (!file) return sendError(res, 'CAP_NO_FILE');
+    if (file.size === 0) return sendError(res, 'CAP_NO_FILE', { message: 'File is empty.' });
     if (!ALLOWED_EXTRACT_IMAGES_MIMES.includes(file.mimetype)) {
       return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type for image extraction.' });
     }

@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Match server/index.js — the API_PORT env (default 3003) lets us dodge an
+// orphan node holding the old 3001. Both processes read the same env so
+// the proxy target and the server's listen port stay in lockstep.
+const API_PORT = Number(process.env.API_PORT) || 3003;
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -14,7 +19,7 @@ export default defineConfig({
         // Loopback IPv4 literal — `localhost` resolves to ::1 on Windows
         // and triggers ERR_CONNECTION_RESET against an Express server that
         // only listens on IPv4.
-        target: 'http://127.0.0.1:3001',
+        target: `http://127.0.0.1:${API_PORT}`,
         changeOrigin: true,
         // Generous proxy timeouts — Gemini calls can take 1–3 minutes on PDFs.
         timeout: 600_000,
