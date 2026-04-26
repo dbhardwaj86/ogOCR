@@ -10,6 +10,10 @@ import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import sharp from 'sharp';
 import os from 'os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { promises as fsp } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { sendError, codeFromException } from './sendError.js';
 
@@ -163,6 +167,27 @@ let folderIdPromise = null;
     console.log('Drive integration enabled.');
   } else {
     console.log(`Drive integration not configured — /api/save-drive will mock. Missing: ${missing.join(', ')}`);
+  }
+}
+
+// Pandoc detect-and-mock. Probe `pandoc --version` once at boot; cache the
+// boolean so /api/_status and /api/export-docx don't re-spawn the binary on
+// every request. Mirrors the Drive/Email/Classroom mock disclosure pattern.
+const DOCX_TIMEOUT_MS = 30_000;
+const DOCX_MAX_MARKDOWN_BYTES = 12 * 1024 * 1024; // matches express.json cap
+let PANDOC_AVAILABLE = false;
+{
+  try {
+    const probe = spawnSync('pandoc', ['--version'], { shell: false, timeout: 5000 });
+    if (probe.status === 0 && probe.stdout) {
+      PANDOC_AVAILABLE = true;
+      const firstLine = probe.stdout.toString().split('\n')[0].trim();
+      console.log(`[pandoc] available ${firstLine}`);
+    } else {
+      console.log('[pandoc] not installed — DOCX export will mock');
+    }
+  } catch {
+    console.log('[pandoc] not installed — DOCX export will mock');
   }
 }
 
@@ -572,6 +597,69 @@ app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.array('
   }
 });
 
+// Word export via Pandoc. Detect-and-mock: if `pandoc` was missing at boot
+// the route returns an EXP_DOCX_NO_BINARY envelope; otherwise it spawns
+// pandoc with no shell interpolation, writes input to a randomly-named
+// temp file, and streams the resulting .docx back. Cleanup happens in a
+// try/finally regardless of outcome.
+app.post('/api/export-docx', async (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const markdown = typeof body.markdown === 'string' ? body.markdown : '';
+  const safeName = sanitizeDriveFilename(body.filename || 'compile.docx');
+
+  if (!markdown.trim()) {
+    return sendError(res, 'OCR_BAD_PROMPT', { message: 'Markdown body is required.' });
+  }
+  if (Buffer.byteLength(markdown, 'utf8') > DOCX_MAX_MARKDOWN_BYTES) {
+    return sendError(res, 'EXP_DOCX_TOO_LARGE');
+  }
+
+  if (!PANDOC_AVAILABLE) {
+    return sendError(res, 'EXP_DOCX_NO_BINARY');
+  }
+
+  const suffix = crypto.randomBytes(8).toString('hex');
+  const tempIn = path.join(os.tmpdir(), `ogocr-docx-${suffix}.md`);
+  const tempOut = path.join(os.tmpdir(), `ogocr-docx-${suffix}.docx`);
+
+  try {
+    await fsp.writeFile(tempIn, markdown, 'utf8');
+
+    const run = new Promise((resolve, reject) => {
+      const child = spawn(
+        'pandoc',
+        [tempIn, '-f', 'markdown+tex_math_dollars+raw_html', '-t', 'docx', '-o', tempOut],
+        { shell: false }
+      );
+      let stderr = '';
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`pandoc exit ${code}: ${stderr.trim() || 'no stderr'}`));
+      });
+    });
+
+    await withTimeout(run, DOCX_TIMEOUT_MS);
+
+    const buffer = await fsp.readFile(tempOut);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    return res.end(buffer);
+  } catch (err) {
+    if (err?.message === TIMEOUT_MARKER) {
+      return sendError(res, 'EXP_DOCX_TIMEOUT');
+    }
+    console.error('[pandoc] export failed:', err?.message || err);
+    return sendError(res, 'EXP_DOCX_PANDOC_FAIL', { cause: err?.message || err });
+  } finally {
+    // Best-effort cleanup. Errors (file not yet created) are silent.
+    fsp.unlink(tempIn).catch(() => {});
+    fsp.unlink(tempOut).catch(() => {});
+  }
+});
+
 // Status: lets the client paint a "MOCK · email,classroom" pill in the top
 // bar so the user knows which I/O paths are real vs. mocked. Cheap and safe
 // to call repeatedly — read-only, derived from process.env.
@@ -583,6 +671,7 @@ app.get('/api/_status', (_req, res) => {
     email: emailReal ? 'real' : 'mock',
     drive: driveReal ? 'real' : 'mock',
     classroom: 'mock',
+    docx: PANDOC_AVAILABLE ? 'real' : 'mock',
     auth: process.env.OG_API_TOKEN ? 'token' : 'open',
     serverTime: Date.now(),
   });

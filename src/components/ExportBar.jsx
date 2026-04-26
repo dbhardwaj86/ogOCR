@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { showError, showInfo } from '../errors/showError';
 import { errFromResponse, errFromException } from '../errors/errFromResponse';
+import { exportDocx } from '../exportDocx';
 
 const DRIVE_RECENT_KEY = 'ogOCR_drive_recent';
 const DRIVE_RECENT_MAX = 5;
@@ -416,6 +417,22 @@ function ExportBar({ session, onShowToast, processing }) {
     }
   };
 
+  const handleDocx = async () => {
+    if (noContent) {
+      showError('EXP_EMAIL_NO_CONTENT');
+      return;
+    }
+    // Per-session export: the session's text field is the markdown source.
+    // SVG-only sessions have nothing meaningful to convert to .docx, so fall
+    // through to text and let pandoc handle whatever it gets.
+    const md = session?.text || '';
+    if (!md.trim()) {
+      showError('EXP_EMAIL_NO_CONTENT');
+      return;
+    }
+    await exportDocx({ markdown: md, filename: baseName + '.docx' });
+  };
+
   const handlePDF = () => {
     if (noContent) return;
     window.print();
@@ -503,6 +520,7 @@ function ExportBar({ session, onShowToast, processing }) {
     { id: 'drive', glyph: driveGlyph, label: driveLabel, onClick: handleDrive,
       disabled: noContent || processing || driveBusy },
     { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
+    { id: 'docx',  glyph: '⌘', label: 'DOCX', onClick: handleDocx, disabled: noContent || !session?.text },
     { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
   ];
   const shareItems = [
