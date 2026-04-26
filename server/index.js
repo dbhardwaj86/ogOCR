@@ -185,6 +185,31 @@ function sanitizeDriveFilename(name) {
   return cleaned || 'ogOCR_Document.txt';
 }
 
+// Path-segment sanitizer for Drive subfolder names. Slashes are the path
+// separator so they're stripped at the segment level instead of joined
+// (sanitizeDriveFilename strips them too — done explicitly here to keep the
+// folder/file split obvious to a reader).
+function sanitizeFolderSegment(segment) {
+  return (typeof segment === 'string' ? segment : '')
+    .replace(/[/\\]/g, '')
+    .split('\x00').join('')
+    .replace(BIDI_RE, '')
+    .trim()
+    .slice(0, 255);
+}
+
+// Split user-supplied `folderPath` (e.g. "work/2026" or "work\\2026") into
+// validated, sanitized segments. Returns [] for falsy/empty input or if every
+// segment is invalid — the caller treats that as "no subpath, use root folder".
+function parseFolderPath(folderPath) {
+  if (typeof folderPath !== 'string' || !folderPath.trim()) return [];
+  return folderPath
+    .split(/[/\\]+/)
+    .map(sanitizeFolderSegment)
+    .filter(Boolean)
+    .slice(0, 8); // hard cap to avoid runaway directory creation
+}
+
 // Escape single quotes in a Drive query value. Today DRIVE_FOLDER_NAME is a
 // constant, but if it ever becomes user-supplied we already handle it.
 function escapeDriveQ(value) {
@@ -221,6 +246,37 @@ function getOrCreateOgFolder() {
     throw err;
   });
   return folderIdPromise;
+}
+
+// Walk a sequence of folder segments below `parentId`, looking up each
+// segment by name (escaped) and creating it if missing. Returns the leaf
+// folder id. Each segment is sanitized by the caller (parseFolderPath).
+// Not memoized — folders are user-supplied and the savings would be small
+// versus the risk of stale cache after a manual Drive delete.
+async function getOrCreateChildFolder(parentId, name) {
+  const list = await driveClient.files.list({
+    q: `'${escapeDriveQ(parentId)}' in parents and name='${escapeDriveQ(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id)',
+    pageSize: 1,
+  });
+  if (list.data.files?.length) return list.data.files[0].id;
+  const created = await driveClient.files.create({
+    requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+    fields: 'id',
+  });
+  return created.data.id;
+}
+
+// Resolve the leaf folder id for `segments`, creating any missing folders
+// inside the ogOCR root. Empty `segments` returns the ogOCR root id (preserves
+// the existing single-folder behavior).
+async function resolveDriveFolder(segments) {
+  let parentId = await getOrCreateOgFolder();
+  for (const seg of segments) {
+    parentId = await getOrCreateChildFolder(parentId, seg);
+  }
+  return parentId;
 }
 
 app.post('/api/extract', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
@@ -299,14 +355,21 @@ app.post('/api/save-drive', async (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const text = typeof body.text === 'string' ? body.text : '';
   const safeName = sanitizeDriveFilename(body.filename);
+  // Optional folder path — empty array preserves the existing single-folder
+  // behavior. Sanitized + capped here so the route handler stays the
+  // canonical place to reason about Drive layout.
+  const folderSegments = parseFolderPath(body.folderPath);
+  const folderDisplay = folderSegments.length
+    ? `${DRIVE_FOLDER_NAME}/${folderSegments.join('/')}`
+    : DRIVE_FOLDER_NAME;
 
   if (!driveClient) {
-    console.log(`[MOCK DRIVE] Saving ${safeName} to Drive...`);
+    console.log(`[MOCK DRIVE] Saving ${safeName} to ${folderDisplay}...`);
     const timer = setTimeout(() => {
       res.json({
         success: true,
         mock: true,
-        message: `(Mock) Saved ${safeName}. Run \`npm run bootstrap-drive\` to enable real Drive saves.`,
+        message: `(Mock) Saved ${safeName} to ${folderDisplay}. Run \`npm run bootstrap-drive\` to enable real Drive saves.`,
       });
     }, 1500);
     res.on('close', () => clearTimeout(timer));
@@ -315,7 +378,7 @@ app.post('/api/save-drive', async (req, res) => {
 
   try {
     const save = (async () => {
-      const folderId = await getOrCreateOgFolder();
+      const folderId = await resolveDriveFolder(folderSegments);
       const mimeType = mimeForFilename(safeName);
       const created = await driveClient.files.create({
         requestBody: { name: safeName, parents: [folderId] },
@@ -329,9 +392,10 @@ app.post('/api/save-drive', async (req, res) => {
     res.json({
       success: true,
       mock: false,
-      message: `Saved ${safeName} to Drive`,
+      message: `Saved ${safeName} to Drive (${folderDisplay})`,
       fileId: data.id,
       webViewLink: data.webViewLink,
+      folderPath: folderSegments.join('/'),
     });
   } catch (error) {
     const status = error?.code || error?.response?.status;
@@ -347,10 +411,19 @@ app.post('/api/classroom/draft', (req, res) => {
   const { filename = 'ogOCR_Classroom_Draft' } = (req.body && typeof req.body === 'object') ? req.body : {};
   console.log(`[MOCK CLASSROOM] Drafting assignment: ${filename}...`);
   const timer = setTimeout(() => {
+    // Mock disclosure: emit a parallel `info` envelope keyed by registry code.
+    // Client logic still reads `success: true` and proceeds, but it picks the
+    // info envelope up first and routes it through showError so the toast
+    // gets the registry's info-severity styling.
     res.json({
       success: true,
       mock: true,
-      message: `(Mock) Drafted ${filename} to Classroom. Real Classroom integration is on the roadmap.`,
+      message: `(Mock) Drafted ${filename} to Classroom.`,
+      info: {
+        code: 'EXP_CLASSROOM_MOCK',
+        message: 'Classroom export is in preview.',
+        hint: `Coming soon — we logged a draft for ${filename} locally.`,
+      },
     });
   }, 1500);
   // Use res.on('close', ...) — req.on('close') fires when express.json() finishes

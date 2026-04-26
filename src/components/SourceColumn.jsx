@@ -1,11 +1,7 @@
-import { useState } from 'react';
 import SourcePreview from './SourcePreview';
-import SourceTablets from './SourceTablets';
 import MagicActions from './MagicActions';
 
-function SourceColumn({ session, file, processing, onRun, showTablets }) {
-  const [imageDims, setImageDims] = useState(null);
-
+function SourceColumn({ session, file, processing, onRun }) {
   if (!session && !file) {
     return (
       <section className="og-source">
@@ -24,7 +20,6 @@ function SourceColumn({ session, file, processing, onRun, showTablets }) {
           <span className="og-source-num">{numLabel}</span>
           <span className="og-source-name">{nameLabel}</span>
         </div>
-        {showTablets && <SourceTablets session={session} imageDims={imageDims} />}
       </div>
 
       <div className="og-source-stage">
@@ -32,7 +27,6 @@ function SourceColumn({ session, file, processing, onRun, showTablets }) {
           session={session}
           file={file}
           processing={processing}
-          onImageDims={setImageDims}
         />
       </div>
 

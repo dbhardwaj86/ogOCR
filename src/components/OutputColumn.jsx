@@ -7,6 +7,40 @@ import PromptDock from './PromptDock';
 import InlineError from './InlineError';
 import { KIND_LABEL } from '../magicActions';
 
+// Inline rename input — extracted so a `key` on this component (the session
+// id + persisted exportName) cleanly resets local draft state when the active
+// session or its persisted name changes externally. Avoids syncing-effect
+// anti-pattern (forbidden by react-hooks/set-state-in-effect).
+function RenameInput({ initialValue, fallback, ariaLabel, onCommit }) {
+  const [draft, setDraft] = useState(initialValue);
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === initialValue) return;
+    onCommit(trimmed);
+  };
+  return (
+    <input
+      type="text"
+      className="og-output-rename"
+      placeholder={fallback || 'Rename for export'}
+      aria-label={ariaLabel}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(initialValue);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function OutputColumn({
   session,
   processing,
@@ -47,6 +81,15 @@ function OutputColumn({
           <span className="og-output-h">Extracted Document</span>
           <span className="og-output-sep">/</span>
           <span className="og-output-kind">{kindLabel}</span>
+          {session && (
+            <RenameInput
+              key={`${session.id}:${session.exportName || ''}`}
+              initialValue={session.exportName || ''}
+              fallback={session.filename}
+              ariaLabel="Filename for exports (leave blank to use original)"
+              onCommit={(next) => onUpdateSession && onUpdateSession({ exportName: next })}
+            />
+          )}
         </div>
         <div className="og-output-modes">
           <button
