@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -8,6 +8,7 @@ import { sanitizeSvg } from '../svgSanitize';
 import { stripDetectedLang } from '../magicActions';
 import { ERRORS } from '../errors/codes';
 import EquationBlock from './EquationBlock';
+import TableBlock, { parseGfmTable } from './TableBlock';
 
 // Sprint 2.8a — detect a fenced ```mermaid block in extracted text. Exported
 // for testability so the unit suite doesn't have to lazy-load mermaid itself.
@@ -24,20 +25,37 @@ export function detectMermaidBlock(text) {
 }
 
 /* eslint-disable no-unused-vars */
-const mdComponents = {
-  h1: ({ node, ...p }) => <h1 className="og-h1" {...p} />,
-  h2: ({ node, ...p }) => <h2 className="og-h2" {...p} />,
-  h3: ({ node, ...p }) => <h3 className="og-h3" {...p} />,
-  p:  ({ node, ...p }) => <p className="og-p" {...p} />,
-  ul: ({ node, ...p }) => <ul className="og-ul" {...p} />,
-  ol: ({ node, ...p }) => <ol className="og-ol" {...p} />,
-  blockquote: ({ node, ...p }) => <blockquote className="og-bq" {...p} />,
-  table: ({ node, ...p }) => <table className="og-table" {...p} />,
-  code({ node, inline, className, children, ...p }) {
-    if (inline) return <code className="og-code-inline" {...p}>{children}</code>;
-    return <pre><code className={className} {...p}>{children}</code></pre>;
-  },
-};
+// Sprint 3.2 — when the markdown contains a fenced GFM table, we render
+// `<TableBlock>` (the editable spreadsheet) and consume the first <table>
+// emitted by react-markdown to avoid double-rendering. The `tableData` arg
+// carries the pre-parsed `{ headers, rows }` so the component can mount
+// directly with content; the closure variable `consumed` makes sure only
+// the first <table> in the document is replaced (any subsequent tables fall
+// back to the default styled <table>). Building components per-render keeps
+// the consumed flag scoped per render pass.
+function buildMdComponents(tableData) {
+  let consumed = false;
+  return {
+    h1: ({ node, ...p }) => <h1 className="og-h1" {...p} />,
+    h2: ({ node, ...p }) => <h2 className="og-h2" {...p} />,
+    h3: ({ node, ...p }) => <h3 className="og-h3" {...p} />,
+    p:  ({ node, ...p }) => <p className="og-p" {...p} />,
+    ul: ({ node, ...p }) => <ul className="og-ul" {...p} />,
+    ol: ({ node, ...p }) => <ol className="og-ol" {...p} />,
+    blockquote: ({ node, ...p }) => <blockquote className="og-bq" {...p} />,
+    table: ({ node, ...p }) => {
+      if (tableData && !consumed) {
+        consumed = true;
+        return <TableBlock headers={tableData.headers} rows={tableData.rows} />;
+      }
+      return <table className="og-table" {...p} />;
+    },
+    code({ node, inline, className, children, ...p }) {
+      if (inline) return <code className="og-code-inline" {...p}>{children}</code>;
+      return <pre><code className={className} {...p}>{children}</code></pre>;
+    },
+  };
+}
 /* eslint-enable no-unused-vars */
 
 function ImageGrid({ images }) {
@@ -157,6 +175,11 @@ function RenderedDoc({ text, svg, images, mode, onChangeText }) {
   const hasSvg = !!(svg && svg.trim());
   const hasImages = Array.isArray(images) && images.length > 0;
   const mermaidCode = detectMermaidBlock(cleanText);
+  // Sprint 3.2 — parse the first GFM table out of the cleaned text so we
+  // can swap react-markdown's default `<table>` renderer for the editable
+  // TableBlock. We memo on cleanText so we don't re-parse on every render.
+  const tableData = useMemo(() => parseGfmTable(cleanText), [cleanText]);
+  const mdComponents = useMemo(() => buildMdComponents(tableData), [tableData]);
 
   // Sprint 3.1 — equation mode: live LaTeX preview pane. Bypasses the
   // markdown render path entirely. Wires the textarea back to the session
