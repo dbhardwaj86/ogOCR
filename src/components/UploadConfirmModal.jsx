@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 function formatBytes(n) {
   if (n < 1024) return `${n} B`;
@@ -18,6 +18,43 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
     if (!previewUrl) return undefined;
     return () => URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
+
+  // Render page 1 of the PDF as a thumbnail. Lazy-loads pdfjs-dist so the
+  // dependency stays out of the main bundle. Cached in state for the modal's
+  // lifecycle. Falls back to the placeholder text on any error.
+  const [pdfPage1, setPdfPage1] = useState(null);
+  const [pdfError, setPdfError] = useState(null);
+
+  useEffect(() => {
+    if (!isPdf || !file) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        const workerUrl = (await import('pdfjs-dist/build/pdf.worker.mjs?url')).default;
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        const buf = await file.arrayBuffer();
+        if (cancelled) return;
+        const doc = await pdfjs.getDocument({ data: buf }).promise;
+        const page = await doc.getPage(1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        if (!cancelled) setPdfPage1(canvas.toDataURL('image/png'));
+      } catch (e) {
+        if (!cancelled) setPdfError(e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Reset state on cleanup so a different file re-runs from scratch.
+      setPdfPage1(null);
+      setPdfError(null);
+    };
+  }, [file, isPdf]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -48,12 +85,17 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
           {isImage && previewUrl && (
             <img src={previewUrl} alt={file.name} />
           )}
-          {isPdf && (
+          {isPdf && pdfPage1 && (
+            <img src={pdfPage1} alt={`${file.name} — page 1`} />
+          )}
+          {isPdf && !pdfPage1 && (
             <div className="og-upload-confirm-pdf">
               <span className="og-upload-confirm-pdf-glyph">▤</span>
               <span className="og-upload-confirm-pdf-name">{file.name}</span>
               <span className="og-upload-confirm-pdf-note">
-                Preview not available — Gemini will read all pages.
+                {pdfError
+                  ? 'Preview not available — Gemini will read all pages.'
+                  : 'Rendering page 1 preview…'}
               </span>
             </div>
           )}
