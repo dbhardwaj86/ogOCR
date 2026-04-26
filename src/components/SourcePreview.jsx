@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import CornerBracket from './CornerBracket';
 
 function PlaceholderLines({ seed }) {
@@ -43,6 +43,45 @@ function SourcePreview({ session, file, processing, onImageDims }) {
   const pct = processing?.progress ?? 0;
   const stage = processing?.stage;
 
+  // Lazy-render page 1 of a PDF using pdfjs-dist via dynamic import. Keeps the
+  // main bundle lean (Phase 12 removed pdfjs-dist; reintroduced here for the
+  // preview-only path). Falls back silently to the placeholder on any error.
+  const [pdfPage1, setPdfPage1] = useState(null);
+  const [pdfError, setPdfError] = useState(null);
+
+  useEffect(() => {
+    if (!file || file.type !== 'application/pdf') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        const workerUrl = (await import('pdfjs-dist/build/pdf.worker.mjs?url')).default;
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        const buf = await file.arrayBuffer();
+        if (cancelled) return;
+        const doc = await pdfjs.getDocument({ data: buf }).promise;
+        const page = await doc.getPage(1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        if (!cancelled) setPdfPage1(canvas.toDataURL('image/png'));
+      } catch (e) {
+        if (!cancelled) setPdfError(e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Reset on cleanup so a swap from one PDF to another (or to an image)
+      // re-runs the effect with a clean slate. This runs *outside* the effect
+      // body so it doesn't trigger the cascading-renders lint.
+      setPdfPage1(null);
+      setPdfError(null);
+    };
+  }, [file]);
+
   const handleImgLoad = (e) => {
     const img = e.currentTarget;
     if (img.naturalWidth && onImageDims) {
@@ -71,8 +110,12 @@ function SourcePreview({ session, file, processing, onImageDims }) {
 
         {imageUrl ? (
           <img className="og-doc-image" src={imageUrl} alt={filename} onLoad={handleImgLoad} />
+        ) : isPdf && pdfPage1 ? (
+          <img className="og-doc-image" src={pdfPage1} alt={`${filename} — page 1`} />
         ) : isPdf ? (
-          <div className="og-doc-pdf">PDF document — preview unavailable</div>
+          <div className="og-doc-pdf">
+            {pdfError ? 'PDF document — preview unavailable' : 'Rendering PDF preview…'}
+          </div>
         ) : (
           <PlaceholderLines seed={seed} />
         )}
