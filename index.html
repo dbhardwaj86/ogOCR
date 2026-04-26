@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="paper">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ogOCR</title>
+    <script>
+      // Apply persisted theme synchronously, before React mounts, to avoid first-paint flash.
+      try {
+        var t = localStorage.getItem('ogOCR_theme');
+        if (t === 'paper' || t === 'sepia' || t === 'ink') {
+          document.documentElement.dataset.theme = t;
+        }
+      } catch (e) { /* localStorage unavailable; keep default */ }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

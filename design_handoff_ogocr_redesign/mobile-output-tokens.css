@@ -1,0 +1,123 @@
+/* =====================================================================
+   ogOCR — mobile layout tokens (handoff)
+   ---------------------------------------------------------------------
+   These custom properties expose every dimension the mobile-portrait
+   redesign tunes. A designer can edit just this file, screenshot the
+   resulting layouts in `mobile-output-v2.html` / `mobile-upload-flows.html`,
+   and hand back the diff.
+
+   The production code in `src/index.css` does NOT yet read these tokens
+   directly — the values are inlined in the @media (max-width: 880px)
+   block. To wire them up, the implementation can replace the inlined
+   values with `var(--mobile-*)` references and import this file.
+
+   Token names follow the pattern --mobile-<region>-<property>.
+   ===================================================================== */
+
+:root {
+  /* ─── App shell ────────────────────────────────────────────────── */
+  --mobile-breakpoint:           880px;     /* @media (max-width: …) */
+  --mobile-app-height:           100dvh;    /* dynamic viewport, iOS-safe */
+  --mobile-bg:                   oklch(0.985 0.005 80);
+  --mobile-bg-deep:              oklch(0.965 0.008 80);
+
+  /* ─── TopBar (mobile collapsed) ────────────────────────────────── */
+  --mobile-topbar-pad:           10px 14px;
+  --mobile-topbar-wordmark:      22px;      /* og + OCR font-size */
+
+  /* ─── MobileTabs (01 LIBRARY · 02 SOURCE · 03 OUTPUT) ─────────── */
+  --mobile-tab-min-h:            44px;      /* Apple HIG min tap target */
+  --mobile-tab-pad:              8px 6px;
+  --mobile-tab-font:             11px;
+  --mobile-tab-letter-spacing:   0.14em;
+
+  /* ─── Output column (the 70 % canvas budget lives here) ─────────── */
+  --mobile-output-rows:          auto auto minmax(0, 1fr) auto;
+  --mobile-output-head-pad:      8px 14px;
+  --mobile-output-head-h:        ~36px;     /* derived; not a settable knob */
+  --mobile-output-canvas-pad:    14px 16px;
+  --mobile-output-canvas-overscroll: contain;
+
+  /* ─── Foot region (chip strip + prompt) — capped to ~30 % vh ──── */
+  --mobile-output-foot-min:      120px;
+  --mobile-output-foot-pref:     30dvh;
+  --mobile-output-foot-max:      220px;
+  --mobile-output-foot-bg:       var(--mobile-bg-deep);
+  --mobile-output-foot-pad-bot:  env(safe-area-inset-bottom);
+
+  /* ─── ExportBar chip strip ─────────────────────────────────────── */
+  --mobile-export-strip-pad:     10px 12px;
+  --mobile-export-gap:           8px;
+  --mobile-export-group-gap:     6px;
+  --mobile-export-chip-h:        36px;
+  --mobile-export-chip-pad:      6px 10px;
+  --mobile-export-chip-font:     12px;
+  --mobile-export-snap:          x proximity;
+
+  /* ─── PromptDock (single row) ─────────────────────────────────── */
+  --mobile-prompt-grid:          minmax(0, 1fr) auto;
+  --mobile-prompt-pad:           10px 12px;
+  --mobile-prompt-gap:           8px;
+  --mobile-prompt-input-h:       40px;
+  --mobile-prompt-run-h:         40px;
+  --mobile-prompt-run-pad:       6px 14px;
+
+  /* ─── UploadCard "Take photo" button (mobile only) ─────────────── */
+  --mobile-camera-btn-h:         44px;
+  --mobile-camera-btn-pad:       10px 14px;
+  --mobile-camera-btn-mt:        12px;
+  --mobile-camera-btn-border:    var(--accent);
+  --mobile-camera-btn-fg:        var(--accent-ink);
+  --mobile-camera-btn-bg:        var(--bg-card);
+
+  /* ─── Long-press visual cue ────────────────────────────────────── */
+  --mobile-longpress-ms:         500;       /* press-and-hold threshold */
+  --mobile-longpress-cancel-px:  12;        /* movement that cancels press */
+  --mobile-longpress-glow:       0 0 0 3px var(--accent-soft);
+  --mobile-longpress-border:     var(--accent);
+
+  /* ─── Upload confirm modal ────────────────────────────────────── */
+  --mobile-modal-z:              9100;
+  --mobile-modal-pad:            16px;
+  --mobile-modal-shroud:         oklch(0.15 0.01 80 / 0.6);
+  --mobile-modal-shadow:         0 24px 48px -12px oklch(0 0 0 / 0.4);
+  --mobile-modal-rows:           minmax(0, 1fr) auto auto;
+  --mobile-modal-meta-pad:       10px 14px;
+  --mobile-modal-actions-pad:    12px 14px;
+  --mobile-modal-actions-pad-bot: max(12px, env(safe-area-inset-bottom));
+  --mobile-modal-btn-h:          40px;
+  --mobile-modal-btn-pad:        8px 16px;
+}
+
+/* =====================================================================
+   Variant slots — uncomment one block to preview an alternative layout
+   in the handoff HTML mockups.
+   ===================================================================== */
+
+/* Variant B — bottom sheet (foot expands to 60 % on tap)
+:root {
+  --mobile-output-foot-pref: 60dvh;
+  --mobile-output-foot-max:  60dvh;
+}
+*/
+
+/* Variant C — single overflow menu (no chip strip)
+:root {
+  --mobile-export-strip-pad: 8px 12px;
+  --mobile-export-chip-h:    44px;
+  --mobile-output-foot-min:  88px;
+  --mobile-output-foot-pref: 22dvh;
+}
+*/
+
+/* =====================================================================
+   Cross-reference — where these tokens are inlined today.
+   ---------------------------------------------------------------------
+   File:   src/index.css
+   Block:  @media (max-width: 880px) { … }                  (lines ≈ 962+)
+   Rules:  .og-output, .og-output-canvas, .og-output-foot,
+           .og-exports, .og-export-group, .og-export-btn,
+           .og-prompt, .og-prompt-input, .og-prompt-run,
+           .og-upload-camera, .og-upload-confirm-modal,
+           .og-upload-confirm-actions
+   ===================================================================== */

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ogOCR — Two Variants</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="variant-a-calm.css" />
+<link rel="stylesheet" href="variant-b-refined.css" />
+<style>
+  html, body, #root { margin: 0; height: 100%; background: #f0eee8; font-family: 'Inter', system-ui, sans-serif; }
+  /* Inside DCArtboard, our app fills */
+  .dc-artboard-inner > .ca-app, .dc-artboard-inner > .rb-app { height: 100%; width: 100%; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="variant-a-calm.jsx"></script>
+<script type="text/babel" src="variant-b-refined.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+function Notes({ children }) {
+  return <div style={{
+    background: "#fff", border: "1px solid #e2dfd8", borderRadius: 10, padding: "20px 24px",
+    fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, lineHeight: 1.6,
+    color: "#3a342c", maxWidth: 1100,
+  }}>{children}</div>;
+}
+
+function Header({ num, title, sub }) {
+  return <div style={{ marginBottom: 14 }}>
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.16em",
+      textTransform: "uppercase", color: "#c2702e", marginBottom: 6 }}>Variant {num}</div>
+    <h2 style={{ fontFamily: "'Instrument Serif', Georgia, serif", fontSize: 26, fontWeight: 500,
+      margin: "0 0 6px", letterSpacing: "-0.01em", color: "#2b2620" }}>{title}</h2>
+    <div style={{ color: "#5c574f", fontSize: 13 }}>{sub}</div>
+  </div>;
+}
+
+function Root() {
+  return (
+    <DesignCanvas title="ogOCR — Two Redesign Variants" subtitle="Reimagined for cognitive ease (A) · Same flow, refined look (B)">
+      <DCSection id="overview" title="Overview">
+        <DCArtboard id="overview-card" label="Approach" width={1100} height={520}>
+          <Notes>
+            <Header num="A" title="Calm — reimagined for minimum cognitive load"
+              sub="Throws out the 3-pane mental model. Shows one focal task at a time." />
+            <ul style={{ paddingLeft: 20, margin: "8px 0 18px" }}>
+              <li><b>Linear flow:</b> Empty → Drop → Choose intent → Result. No decisions until they matter.</li>
+              <li><b>Intent picker, not action grid:</b> 5 plain-English goals ("Just the text", "As a clean table") instead of 8 cryptic tiles spread across 4 groups.</li>
+              <li><b>Sessions in a popover</b>, not a permanent rail — clear visual field for the actual work.</li>
+              <li><b>Stripped chrome:</b> no metadata tablets, no coordinate labels, no runner/end markers, no mode pills, no command palette UI surface — surface is fewer than half the elements of the original.</li>
+              <li><b>One CTA</b> per screen. One big "Extract" or "New" — never both visible.</li>
+              <li><b>Single sticky ask bar</b> after extraction handles all follow-ups (translate, summarize, etc) — replaces the dock + presets + run button stack.</li>
+            </ul>
+
+            <Header num="B" title="Refined — same flow, elevated visuals"
+              sub="Identical features, layout regions, and interactions. New visual direction." />
+            <ul style={{ paddingLeft: 20, margin: "8px 0 0" }}>
+              <li><b>Three-pane workspace</b> preserved: Library Rail · Source · Output.</li>
+              <li><b>All 8 magic actions</b>, grouped by Text/Structure/Symbol/Visual.</li>
+              <li><b>All 3 view modes</b> (Rendered/Source/Diff), all 9 export buttons across 3 groups, hero prompt dock with presets, ⌘K command palette.</li>
+              <li><b>Visual shifts:</b> warm-paper → cool architectural; Instrument Serif → <em>Fraunces</em>; Inter → <em>Inter Tight</em>; JetBrains Mono → <em>IBM Plex Mono</em>; new icon-driven brand mark; rounded 8px corners replace crisp 2px; subtle gradients on stage; refined hover lifts.</li>
+            </ul>
+          </Notes>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="variant-a" title="Variant A — Calm">
+        <DCArtboard id="a-empty" label="A.1 — Empty state" width={1280} height={820}>
+          <CalmAppDemo state="empty" />
+        </DCArtboard>
+        <DCArtboard id="a-ready" label="A.2 — Document loaded · choose intent" width={1280} height={820}>
+          <CalmAppDemo state="ready" />
+        </DCArtboard>
+        <DCArtboard id="a-result" label="A.3 — Result · single ask bar" width={1280} height={820}>
+          <CalmAppDemo state="result" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="variant-b" title="Variant B — Refined">
+        <DCArtboard id="b-main" label="B.1 — Three-pane workspace" width={1440} height={900}>
+          <RefinedApp />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+// Helper to mount a Calm app in a particular state (we re-mount to a fresh variant)
+function CalmAppDemo({ state }) {
+  // mount the regular CalmApp, then push state via a wrapper.
+  // We pass state by patching the initial state via a key-based remount.
+  return <CalmStateful state={state} />;
+}
+
+function CalmStateful({ state }) {
+  // Render a CalmApp variant with a controlled initial state by supplying overrides.
+  return <CalmApp __initialState={state} />;
+}
+
+// Patch CalmApp to accept __initialState (additive helper)
+const _OriginalCalm = window.CalmApp;
+window.CalmApp = function CalmAppPatched(props) {
+  // We can't easily edit internal hooks from here. Instead, render the original
+  // and use a small auto-driver effect that simulates clicks based on state.
+  return <CalmDriver state={props.__initialState}><_OriginalCalm /></CalmDriver>;
+};
+
+// Driver simulates user actions to put CalmApp into a target state on mount
+function CalmDriver({ state, children }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!ref.current || !state || state === "empty") return;
+    // Find buttons by text inside this artboard's DOM
+    const root = ref.current;
+    const click = (selector, predicate) => {
+      const els = root.querySelectorAll(selector);
+      for (const el of els) {
+        if (!predicate || predicate(el)) { el.click(); return true; }
+      }
+      return false;
+    };
+    if (state === "ready") {
+      // Open library, click first session
+      setTimeout(() => {
+        click('.ca-top-btn', (b) => b.textContent.includes("Library"));
+        setTimeout(() => click('.ca-lib-row'), 80);
+      }, 30);
+    }
+    if (state === "result") {
+      // Pick session, then choose first intent, then click Extract
+      setTimeout(() => {
+        click('.ca-top-btn', (b) => b.textContent.includes("Library"));
+        setTimeout(() => {
+          click('.ca-lib-row');
+          setTimeout(() => {
+            click('.ca-intent');
+            setTimeout(() => {
+              click('.ca-cta');
+            }, 60);
+          }, 60);
+        }, 80);
+      }, 30);
+    }
+  }, [state]);
+  return <div ref={ref} style={{height: "100%", width: "100%"}}>{children}</div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>

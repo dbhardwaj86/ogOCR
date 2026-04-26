@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ogOCR — Mobile upload flows (handoff)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:           oklch(0.985 0.005 80);
+      --bg-deep:      oklch(0.965 0.008 80);
+      --bg-card:      oklch(1.000 0 0);
+      --ink:          oklch(0.22 0.012 80);
+      --ink-soft:     oklch(0.42 0.010 80);
+      --ink-faint:    oklch(0.62 0.008 80);
+      --rule:         oklch(0.90 0.008 80);
+      --rule-soft:    oklch(0.94 0.006 80);
+      --accent:       oklch(0.55 0.20 250);
+      --accent-soft:  oklch(0.55 0.20 250 / 0.10);
+      --accent-ink:   oklch(0.40 0.20 250);
+      --serif: 'Fraunces', Georgia, serif;
+      --mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans:  system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: oklch(0.92 0.006 80); font-family: var(--sans); color: var(--ink); }
+    .stage {
+      min-height: 100vh;
+      padding: 32px;
+      display: flex; flex-direction: column; gap: 32px;
+    }
+    .header h1 { font-family: var(--serif); font-size: 28px; margin: 0 0 4px 0; }
+    .header .sub { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.10em; text-transform: uppercase; }
+    .frames {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(360px, 1fr));
+      gap: 32px;
+      align-items: start;
+    }
+    @media (max-width: 1280px) {
+      .frames { grid-template-columns: 1fr; }
+    }
+    .frame-col {
+      display: grid; gap: 16px;
+      justify-items: center;
+    }
+    .frame-cap {
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--accent-ink);
+    }
+    .frame-cap small {
+      display: block; margin-top: 4px;
+      color: var(--ink-faint); font-size: 11px;
+      letter-spacing: 0.06em; text-transform: none;
+    }
+
+    .phone {
+      width: 360px; height: 720px;
+      background: #1a1a1a; border-radius: 44px; padding: 10px;
+      box-shadow: 0 24px 60px -16px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .phone-screen {
+      width: 100%; height: 100%;
+      border-radius: 36px; background: var(--bg);
+      overflow: hidden;
+      position: relative;
+    }
+    .phone-notch {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      width: 110px; height: 28px; border-radius: 16px; background: #000; z-index: 5;
+    }
+
+    /* Topbar + tabs (same shape across all three frames) */
+    .og-app {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      height: 100%;
+      padding-top: 40px;
+    }
+    .og-topbar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: var(--bg);
+    }
+    .og-brand { display: flex; align-items: baseline; gap: 4px; }
+    .og-word-og   { font-family: var(--serif); font-style: italic; font-size: 22px; }
+    .og-word-ocr  { font-family: var(--serif); font-size: 22px; }
+    .og-word-num  { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-left: 4px; letter-spacing: 0.10em; }
+    .og-word-num .accent { color: var(--accent); }
+    .og-kbd { padding: 2px 6px; border: 1px solid var(--rule); background: var(--bg-card); font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+
+    .og-mobile-tabs {
+      display: flex;
+      border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+      background: var(--bg-deep);
+    }
+    .og-mobile-tab {
+      flex: 1; min-height: 44px; padding: 8px 6px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      background: transparent; border: 0;
+      border-top: 2px solid transparent; border-bottom: 2px solid transparent;
+      font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+      letter-spacing: 0.14em; text-transform: uppercase;
+    }
+    .og-mobile-tab.is-active { color: var(--ink); border-bottom-color: var(--accent); }
+    .og-mobile-tab-num { color: var(--accent); }
+
+    /* Library pane */
+    .og-rail {
+      padding: 16px;
+      display: flex; flex-direction: column; gap: 16px;
+      overflow-y: auto;
+    }
+    .og-rail-section { display: flex; flex-direction: column; gap: 10px; }
+    .og-section-title {
+      display: flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+      letter-spacing: 0.14em; text-transform: uppercase;
+    }
+    .og-section-num { color: var(--accent); }
+
+    .og-upload-card {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1.4 / 1;
+      background: var(--bg-card);
+      border: 1px dashed var(--rule);
+      display: grid; place-items: center;
+      gap: 6px;
+      padding: 18px;
+      cursor: pointer;
+      -webkit-touch-callout: none; user-select: none;
+    }
+    .og-upload-card.is-long-pressing {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .og-upload-card .corners {
+      position: absolute; inset: 6px;
+      pointer-events: none;
+    }
+    .og-upload-card .corners::before,
+    .og-upload-card .corners::after,
+    .og-upload-card .corner2::before,
+    .og-upload-card .corner2::after {
+      content: ""; position: absolute; width: 14px; height: 14px;
+      border: 1px solid var(--rule);
+    }
+    .og-upload-card .corners::before { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+    .og-upload-card .corners::after  { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+    .og-upload-card .corner2::before { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+    .og-upload-card .corner2::after  { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+    .og-upload-glyph { font-family: var(--serif); font-size: 32px; color: var(--accent); }
+    .og-upload-title { font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--ink); }
+    .og-upload-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); letter-spacing: 0.10em; text-transform: uppercase; }
+
+    .og-upload-camera {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--accent);
+      color: var(--accent-ink);
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 0.10em; text-transform: uppercase;
+      cursor: pointer;
+    }
+    .og-upload-camera-glyph { font-family: var(--serif); font-size: 18px; color: var(--accent); line-height: 1; }
+
+    /* Camera flow overlay */
+    .camera-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.92);
+      display: grid; place-items: center;
+      z-index: 50;
+    }
+    .camera-overlay-frame {
+      width: 88%; aspect-ratio: 3/4;
+      border: 2px solid white;
+      border-radius: 4px;
+      position: relative;
+    }
+    .camera-overlay-frame::before {
+      content: "Camera viewfinder · capture=\"environment\"";
+      position: absolute; top: 16px; left: 16px;
+      font-family: var(--mono); font-size: 11px;
+      color: white; letter-spacing: 0.08em;
+    }
+    .camera-shutter {
+      position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: white;
+      border: 4px solid rgba(255,255,255,0.4);
+      box-shadow: 0 0 0 4px black, 0 0 0 6px rgba(255,255,255,0.4);
+    }
+
+    /* Upload confirm modal */
+    .modal-shroud {
+      position: absolute; inset: 0;
+      background: oklch(0.15 0.01 80 / 0.6);
+      display: grid; place-items: center;
+      padding: 16px;
+      z-index: 50;
+    }
+    .modal {
+      width: 100%; height: 100%;
+      max-width: 420px;
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      box-shadow: 0 24px 48px -12px rgba(0,0,0,0.4);
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto auto;
+    }
+    .modal-preview {
+      min-height: 0; overflow: auto;
+      display: grid; place-items: center;
+      background: var(--bg-deep);
+      padding: 16px;
+    }
+    .modal-preview .image-stand {
+      width: 80%;
+      aspect-ratio: 3 / 4;
+      background:
+        linear-gradient(135deg, oklch(0.7 0.04 80) 0%, oklch(0.85 0.02 80) 100%);
+      border: 1px solid var(--rule);
+      display: grid; place-items: center;
+      font-family: var(--serif); font-style: italic; font-size: 28px;
+      color: white;
+      text-shadow: 0 1px 0 rgba(0,0,0,0.15);
+    }
+    .modal-meta {
+      display: flex; justify-content: center; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--rule-soft);
+      font-family: var(--mono); font-size: 11px;
+      color: var(--ink-soft); letter-spacing: 0.06em;
+    }
+    .modal-meta span:not(:last-child)::after {
+      content: "·"; margin-left: 8px; color: var(--ink-faint);
+    }
+    .modal-actions {
+      display: flex; justify-content: flex-end; gap: 8px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--rule);
+      background: var(--bg-deep);
+    }
+    .btn-primary {
+      background: var(--ink); color: var(--bg-card);
+      border: 1px solid var(--ink);
+      padding: 8px 16px;
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      min-height: 40px;
+    }
+    .btn-ghost {
+      background: var(--bg-card); color: var(--ink);
+      border: 1px solid var(--rule);
+      padding: 8px 16px;
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      min-height: 40px;
+    }
+
+    .legend {
+      max-width: 1100px;
+      margin-top: 12px;
+      padding: 18px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+    }
+    .legend h2 { font-family: var(--serif); font-size: 22px; margin: 0 0 8px 0; }
+    .legend p { font-size: 13px; line-height: 1.55; color: var(--ink-soft); margin: 0 0 8px 0; }
+    .legend code { font-family: var(--mono); font-size: 11px; background: var(--bg-deep); padding: 2px 4px; color: var(--accent-ink); }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <header class="header">
+      <h1>Mobile · Upload flows</h1>
+      <div class="sub">three states · tap, camera, long-press preview</div>
+    </header>
+
+    <div class="frames">
+      <!-- ──────────── Frame 1 — default upload card ──────────── -->
+      <div class="frame-col">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="phone-notch"></div>
+            <div class="og-app">
+              <header class="og-topbar">
+                <div class="og-brand">
+                  <span class="og-word-og">og</span><span class="og-word-ocr">OCR</span>
+                  <span class="og-word-num">No.<span class="accent">03</span></span>
+                </div>
+                <div></div>
+                <span class="og-kbd">⌘K</span>
+              </header>
+              <nav class="og-mobile-tabs">
+                <button class="og-mobile-tab is-active"><span class="og-mobile-tab-num">01</span><span>LIBRARY</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">02</span><span>SOURCE</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">03</span><span>OUTPUT</span></button>
+              </nav>
+              <aside class="og-rail">
+                <div class="og-rail-section">
+                  <div class="og-section-title">
+                    <span class="og-section-num">01</span><span>Source</span>
+                  </div>
+                  <div class="og-upload-card">
+                    <span class="corners"></span><span class="corner2"></span>
+                    <span class="og-upload-glyph">＋</span>
+                    <span class="og-upload-title">Drop a document</span>
+                    <span class="og-upload-sub">image · pdf · screenshot</span>
+                  </div>
+                  <button class="og-upload-camera">
+                    <span class="og-upload-camera-glyph">◉</span>
+                    <span>Take photo</span>
+                  </button>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+        <div class="frame-cap">
+          State A · default
+          <small>Upload card + Take Photo button. Short tap card → OS picker. Long-press card → preview-confirm modal (state C).</small>
+        </div>
+      </div>
+
+      <!-- ──────────── Frame 2 — camera capture in progress ──────────── -->
+      <div class="frame-col">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="phone-notch"></div>
+            <div class="og-app">
+              <header class="og-topbar">
+                <div class="og-brand">
+                  <span class="og-word-og">og</span><span class="og-word-ocr">OCR</span>
+                  <span class="og-word-num">No.<span class="accent">03</span></span>
+                </div>
+                <div></div>
+                <span class="og-kbd">⌘K</span>
+              </header>
+              <nav class="og-mobile-tabs">
+                <button class="og-mobile-tab is-active"><span class="og-mobile-tab-num">01</span><span>LIBRARY</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">02</span><span>SOURCE</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">03</span><span>OUTPUT</span></button>
+              </nav>
+              <aside class="og-rail">
+                <div class="og-rail-section">
+                  <div class="og-section-title">
+                    <span class="og-section-num">01</span><span>Source</span>
+                  </div>
+                  <div class="og-upload-card">
+                    <span class="corners"></span><span class="corner2"></span>
+                    <span class="og-upload-glyph">＋</span>
+                    <span class="og-upload-title">Drop a document</span>
+                    <span class="og-upload-sub">image · pdf · screenshot</span>
+                  </div>
+                  <button class="og-upload-camera">
+                    <span class="og-upload-camera-glyph">◉</span>
+                    <span>Take photo</span>
+                  </button>
+                </div>
+              </aside>
+            </div>
+            <div class="camera-overlay">
+              <div class="camera-overlay-frame"></div>
+              <span class="camera-shutter"></span>
+            </div>
+          </div>
+        </div>
+        <div class="frame-cap">
+          State B · camera capture
+          <small>OS camera UI (illustrative). Triggered by `&lt;input capture="environment"&gt;`. Captured frame lands directly in the app — no save-to-gallery detour.</small>
+        </div>
+      </div>
+
+      <!-- ──────────── Frame 3 — preview confirm modal ──────────── -->
+      <div class="frame-col">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="phone-notch"></div>
+            <div class="og-app">
+              <header class="og-topbar">
+                <div class="og-brand">
+                  <span class="og-word-og">og</span><span class="og-word-ocr">OCR</span>
+                  <span class="og-word-num">No.<span class="accent">03</span></span>
+                </div>
+                <div></div>
+                <span class="og-kbd">⌘K</span>
+              </header>
+              <nav class="og-mobile-tabs">
+                <button class="og-mobile-tab is-active"><span class="og-mobile-tab-num">01</span><span>LIBRARY</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">02</span><span>SOURCE</span></button>
+                <button class="og-mobile-tab"><span class="og-mobile-tab-num">03</span><span>OUTPUT</span></button>
+              </nav>
+              <aside class="og-rail">
+                <div class="og-rail-section">
+                  <div class="og-section-title">
+                    <span class="og-section-num">01</span><span>Source</span>
+                  </div>
+                  <div class="og-upload-card is-long-pressing">
+                    <span class="corners"></span><span class="corner2"></span>
+                    <span class="og-upload-glyph">＋</span>
+                    <span class="og-upload-title">Drop a document</span>
+                    <span class="og-upload-sub">image · pdf · screenshot</span>
+                  </div>
+                  <button class="og-upload-camera">
+                    <span class="og-upload-camera-glyph">◉</span>
+                    <span>Take photo</span>
+                  </button>
+                </div>
+              </aside>
+            </div>
+            <div class="modal-shroud">
+              <div class="modal">
+                <div class="modal-preview">
+                  <div class="image-stand">PREVIEW</div>
+                </div>
+                <div class="modal-meta">
+                  <span>scan-2026-04-26.jpg</span>
+                  <span>1.42 MB</span>
+                  <span>image/jpeg</span>
+                </div>
+                <div class="modal-actions">
+                  <button class="btn-ghost">Cancel</button>
+                  <button class="btn-primary">Import</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="frame-cap">
+          State C · long-press preview
+          <small>Long-press (~500 ms) on upload card → OS picker → modal with full preview + filename / size / type + Import / Cancel. Esc, tap-outside, or Cancel dismiss.</small>
+        </div>
+      </div>
+    </div>
+
+    <aside class="legend">
+      <h2>Notes</h2>
+      <p><strong>Camera button</strong> sits below the upload card on mobile (hidden on desktop). It uses a separate hidden <code>&lt;input type="file" accept="image/*" capture="environment"&gt;</code> so the OS opens the camera directly. The captured frame is delivered as a temporary file — no save step.</p>
+      <p><strong>Long-press</strong> is detected via Pointer events on the upload card (500 ms threshold, cancelled by &gt; 12 px movement). When the timer fires the card glows accent — a visual cue that the next pick will go through the preview modal.</p>
+      <p><strong>Short tap</strong> remains the fast path: tap the card → OS picker → auto-import. Drag-drop also auto-imports. The preview-confirm modal is opt-in via long-press.</p>
+      <p><strong>Modal contract</strong>: image preview via <code>URL.createObjectURL</code> with cleanup in <code>useEffect</code>. PDF falls back to a placeholder card (rasterisation pending, see CLAUDE.md). ESC, click-outside, and Cancel all dismiss without committing.</p>
+    </aside>
+  </div>
+</body>
+</html>

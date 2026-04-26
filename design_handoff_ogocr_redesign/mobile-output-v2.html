@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ogOCR — Mobile Output v2 (handoff)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:           oklch(0.985 0.005 80);
+      --bg-deep:      oklch(0.965 0.008 80);
+      --bg-card:      oklch(1.000 0 0);
+      --ink:          oklch(0.22 0.012 80);
+      --ink-soft:     oklch(0.42 0.010 80);
+      --ink-faint:    oklch(0.62 0.008 80);
+      --rule:         oklch(0.90 0.008 80);
+      --rule-soft:    oklch(0.94 0.006 80);
+      --accent:       oklch(0.55 0.20 250);
+      --accent-soft:  oklch(0.55 0.20 250 / 0.10);
+      --accent-ink:   oklch(0.40 0.20 250);
+      --heading:      oklch(0.55 0.18 8);
+      --serif:  'Fraunces', Georgia, serif;
+      --mono:   'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans:   system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: oklch(0.92 0.006 80); color: var(--ink); font-family: var(--sans); }
+    body {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) minmax(280px, 360px);
+      gap: 32px;
+      padding: 32px;
+      align-items: start;
+    }
+    @media (max-width: 880px) {
+      body { grid-template-columns: 1fr; }
+    }
+
+    /* ──── Phone frame ──── */
+    .phone-stage {
+      display: grid;
+      place-items: center;
+      padding: 24px 0;
+    }
+    .phone {
+      width: 390px;
+      height: 844px;
+      background: #1a1a1a;
+      border-radius: 48px;
+      padding: 12px;
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.04) inset,
+        0 24px 60px -16px rgba(0,0,0,0.45),
+        0 8px 16px -4px rgba(0,0,0,0.2);
+      position: relative;
+    }
+    .phone-screen {
+      width: 100%; height: 100%;
+      border-radius: 38px;
+      background: var(--bg);
+      overflow: hidden;
+      position: relative;
+    }
+    .phone-notch {
+      position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+      width: 120px; height: 32px;
+      background: #000;
+      border-radius: 18px;
+      z-index: 5;
+    }
+
+    /* ──── App shell ──── */
+    .og-app {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      height: 100%;
+      background: var(--bg);
+      padding-top: 44px; /* faux iOS status bar room */
+    }
+    .og-topbar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      padding: 10px 14px;
+      gap: 10px;
+      background: var(--bg);
+    }
+    .og-brand { display: flex; align-items: baseline; gap: 4px; }
+    .og-word-og   { font-family: var(--serif); font-style: italic; font-size: 22px; color: var(--ink); }
+    .og-word-ocr  { font-family: var(--serif); font-size: 22px; color: var(--ink); }
+    .og-word-num  { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-left: 4px; letter-spacing: 0.10em; }
+    .og-word-num .accent { color: var(--accent); }
+    .og-topbar-right { display: flex; align-items: center; gap: 8px; }
+    .og-theme-cycle { width: 26px; height: 26px; border: 1px solid var(--rule); background: var(--bg-card); border-radius: 4px; font-family: var(--serif); color: var(--ink-soft); cursor: pointer; }
+    .og-kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border: 1px solid var(--rule); background: var(--bg-card); font-family: var(--mono); font-size: 11px; color: var(--ink-soft); border-radius: 2px; }
+
+    /* Mobile tabs */
+    .og-mobile-tabs {
+      display: flex;
+      background: var(--bg-deep);
+      border-bottom: 1px solid var(--rule);
+      border-top: 1px solid var(--rule);
+    }
+    .og-mobile-tab {
+      flex: 1; min-height: 44px; padding: 8px 6px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      background: transparent; border: 0;
+      border-top: 2px solid transparent; border-bottom: 2px solid transparent;
+      font-family: var(--mono); font-size: 11px;
+      color: var(--ink-faint);
+      letter-spacing: 0.14em; text-transform: uppercase;
+    }
+    .og-mobile-tab.is-active {
+      color: var(--ink);
+      border-bottom-color: var(--accent);
+    }
+    .og-mobile-tab-num { color: var(--accent); font-weight: 500; }
+    .og-mobile-tab.is-active .og-mobile-tab-num { color: var(--accent-ink); }
+
+    /* Output column on mobile */
+    .og-output {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 0;
+      background: var(--bg);
+    }
+    .og-output-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px;
+      flex-wrap: nowrap;
+      border-bottom: 1px solid var(--rule);
+    }
+    .og-output-title {
+      flex: 1 1 0; min-width: 0; overflow: hidden;
+      display: flex; align-items: baseline; gap: 6px;
+    }
+    .og-output-num { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: 0.10em; }
+    .og-output-h { font-family: var(--serif); font-style: italic; font-size: 17px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .og-output-modes { display: flex; gap: 4px; padding: 2px; background: var(--bg-deep); border: 1px solid var(--rule); flex-shrink: 0; }
+    .og-pill {
+      font-family: var(--mono); font-size: 11px;
+      padding: 4px 10px;
+      color: var(--ink-soft); letter-spacing: 0.06em;
+      background: transparent; border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .og-pill.is-active { background: var(--bg-card); color: var(--ink); border: 1px solid var(--rule); }
+
+    .og-output-canvas {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px 16px;
+    }
+    .og-rendered { max-width: 680px; margin: 0 auto; color: var(--ink); }
+    .og-rendered .og-h1 { font-family: var(--serif); font-size: 26px; font-weight: 500; color: var(--heading); margin: 0 0 12px 0; line-height: 1.05; }
+    .og-rendered .og-h2 { font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--heading); margin: 18px 0 8px 0; line-height: 1.15; }
+    .og-rendered .og-p { font-family: var(--serif); font-size: 15px; line-height: 1.65; color: var(--ink); margin: 0 0 14px 0; }
+    .og-rendered code {
+      font-family: var(--mono); font-size: 13px;
+      background: var(--bg-deep); padding: 2px 4px;
+      border-radius: 2px; color: var(--accent-ink);
+    }
+
+    .og-output-foot {
+      max-height: clamp(120px, 30dvh, 220px);
+      overflow-y: auto;
+      border-top: 1px solid var(--rule);
+      background: var(--bg-deep);
+    }
+    .og-exports {
+      display: flex; flex-direction: row; flex-wrap: nowrap;
+      align-items: center;
+      overflow-x: auto;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--rule-soft);
+      position: relative;
+    }
+    .og-exports::after {
+      /* right-edge fade as a scroll affordance */
+      content: "";
+      position: sticky; right: 0; flex: 0 0 24px;
+      align-self: stretch;
+      background: linear-gradient(to right, transparent, var(--bg-deep));
+      margin-left: -24px;
+      pointer-events: none;
+    }
+    .og-export-group {
+      display: flex; flex-direction: row; align-items: center; gap: 6px;
+      padding: 0 8px 0 0;
+      border-right: 1px solid var(--rule-soft);
+      flex: 0 0 auto;
+    }
+    .og-export-group:last-child { border-right: 0; padding-right: 0; }
+    .og-export-btn {
+      flex: 0 0 auto;
+      display: inline-flex; align-items: center; gap: 6px;
+      min-height: 36px;
+      padding: 6px 10px;
+      background: var(--bg-card); border: 1px solid var(--rule);
+      font-family: var(--sans); font-size: 12px; color: var(--ink);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .og-export-btn .glyph { font-family: var(--serif); color: var(--accent); font-size: 13px; line-height: 1; }
+    .og-prompt {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 10px 12px;
+      align-items: stretch;
+    }
+    .og-prompt-input {
+      width: 100%;
+      min-height: 40px;
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      padding: 10px 14px;
+      font-size: 14px;
+      color: var(--ink);
+      font-family: var(--serif); font-style: italic;
+      outline: none;
+    }
+    .og-prompt-run {
+      width: auto; min-height: 40px;
+      padding: 6px 14px;
+      background: var(--ink); color: var(--bg-card);
+      border: 1px solid var(--ink);
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    /* ──── Annotation pins on the phone ──── */
+    .pin {
+      position: absolute;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-family: var(--mono); font-size: 11px; font-weight: 500;
+      display: grid; place-items: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      z-index: 20;
+    }
+    .pin-line {
+      position: absolute;
+      height: 1px;
+      background: var(--accent);
+      transform-origin: 0 0;
+      z-index: 19;
+    }
+
+    /* ──── Legend ──── */
+    .legend {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      padding: 18px 20px;
+      max-width: 360px;
+    }
+    .legend h1 { font-family: var(--serif); font-size: 22px; margin: 0 0 6px 0; color: var(--ink); }
+    .legend .sub { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.10em; text-transform: uppercase; margin-bottom: 14px; }
+    .legend ol { padding: 0; list-style: none; counter-reset: pin; margin: 0; }
+    .legend ol li {
+      counter-increment: pin;
+      padding: 8px 0 8px 32px;
+      border-top: 1px solid var(--rule-soft);
+      position: relative;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--ink-soft);
+    }
+    .legend ol li::before {
+      content: counter(pin);
+      position: absolute; left: 0; top: 8px;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-family: var(--mono); font-size: 11px;
+      display: grid; place-items: center;
+    }
+    .legend ol li strong { color: var(--ink); font-weight: 500; }
+    .legend .meta { font-family: var(--mono); font-size: 11px; color: var(--accent-ink); }
+    .legend .footnote { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule-soft); letter-spacing: 0.04em; }
+  </style>
+</head>
+<body>
+  <div class="phone-stage">
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="og-app">
+          <header class="og-topbar">
+            <div class="og-brand">
+              <span class="og-word-og">og</span><span class="og-word-ocr">OCR</span>
+              <span class="og-word-num">No.<span class="accent">03</span></span>
+            </div>
+            <div></div>
+            <div class="og-topbar-right">
+              <button class="og-theme-cycle" aria-label="Cycle theme">◐</button>
+              <span class="og-kbd">⌘K</span>
+            </div>
+          </header>
+          <nav class="og-mobile-tabs">
+            <button class="og-mobile-tab"><span class="og-mobile-tab-num">01</span><span>LIBRARY</span></button>
+            <button class="og-mobile-tab"><span class="og-mobile-tab-num">02</span><span>SOURCE</span></button>
+            <button class="og-mobile-tab is-active"><span class="og-mobile-tab-num">03</span><span>OUTPUT</span></button>
+          </nav>
+          <section class="og-output">
+            <div class="og-output-head">
+              <div class="og-output-title">
+                <span class="og-output-num">OUT.014</span>
+                <span class="og-output-h">Extracted Document</span>
+              </div>
+              <div class="og-output-modes">
+                <button class="og-pill is-active">Rendered</button>
+                <button class="og-pill">Source</button>
+                <button class="og-pill">Compile</button>
+              </div>
+            </div>
+            <div class="og-output-canvas">
+              <article class="og-rendered">
+                <h1 class="og-h1">Notes on Optical Recognition</h1>
+                <p class="og-p">The lined paper preview rotates while the spinner sweeps top-to-bottom. The output canvas renders the extracted document — Markdown, LaTeX, or SVG depending on the magic-action chosen.</p>
+                <h2 class="og-h2">Sample structure</h2>
+                <p class="og-p">Headings render in <code>--heading</code> (pink), body text in <code>--ink</code>. Inline code uses <code>--accent-ink</code> over <code>--bg-deep</code>.</p>
+                <p class="og-p">A second paragraph here demonstrates how the canvas absorbs the dominant share of viewport height — about 70 % once the controls strip and chrome are subtracted.</p>
+                <h2 class="og-h2">Why a chip strip</h2>
+                <p class="og-p">The horizontal export chip strip is more space-efficient than a vertical stack and gives a one-finger swipe to reach all nine actions. Combined with a single-row prompt dock, the controls fit in roughly 130 px of the viewport.</p>
+              </article>
+            </div>
+            <div class="og-output-foot">
+              <div class="og-exports">
+                <div class="og-export-group">
+                  <button class="og-export-btn"><span class="glyph">▤</span>Drive</button>
+                  <button class="og-export-btn"><span class="glyph">▤</span>MD/SVG</button>
+                  <button class="og-export-btn"><span class="glyph">▤</span>PDF</button>
+                </div>
+                <div class="og-export-group">
+                  <button class="og-export-btn"><span class="glyph">⌁</span>Email</button>
+                  <button class="og-export-btn"><span class="glyph">⌁</span>Class</button>
+                  <button class="og-export-btn"><span class="glyph">⌁</span>Link</button>
+                </div>
+                <div class="og-export-group">
+                  <button class="og-export-btn"><span class="glyph">◇</span>Copy</button>
+                  <button class="og-export-btn"><span class="glyph">◇</span>PNG</button>
+                  <button class="og-export-btn"><span class="glyph">◇</span>JSON</button>
+                </div>
+              </div>
+              <div class="og-prompt">
+                <input class="og-prompt-input" placeholder="Ask anything about the source…" />
+                <button class="og-prompt-run">Run ↵</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <!-- Annotation pins -->
+        <span class="pin" style="top: 56px; left: 12px;">1</span>
+        <span class="pin" style="top: 110px; left: 12px;">2</span>
+        <span class="pin" style="top: 156px; left: 12px;">3</span>
+        <span class="pin" style="top: 360px; right: 12px;">4</span>
+        <span class="pin" style="bottom: 162px; left: 12px;">5</span>
+        <span class="pin" style="bottom: 100px; left: 12px;">6</span>
+        <span class="pin" style="bottom: 36px; left: 12px;">7</span>
+      </div>
+    </div>
+  </div>
+
+  <aside class="legend">
+    <h1>Mobile · Output v2</h1>
+    <div class="sub">phone portrait · tab 03 active</div>
+    <ol>
+      <li><strong>TopBar</strong> · ~44 px · brand mark + theme + ⌘K. Mobile collapses session/model meta. <span class="meta">--mobile-topbar-pad</span></li>
+      <li><strong>MobileTabs</strong> · 44 px · 3 buttons, active gets accent underline. <span class="meta">--mobile-tab-min-h</span></li>
+      <li><strong>Output head</strong> · ~36 px · single row, title + Rendered/Source/Compile pills. Truncates long filenames.</li>
+      <li><strong>Canvas</strong> · ≈ 70 % of viewport · scrolls vertically. <span class="meta">overflow-y: auto · overscroll-behavior: contain</span></li>
+      <li><strong>ExportBar chip strip</strong> · ~56 px · horizontal scroll, snap proximity. Right-edge fade hints at overflow. <span class="meta">--mobile-export-chip-h</span></li>
+      <li><strong>PromptDock</strong> · ~60 px · single row · input + Run. <span class="meta">--mobile-prompt-row-h</span></li>
+      <li><strong>Foot region cap</strong> · clamp(120px, 30dvh, 220px) · pads bottom by env(safe-area-inset-bottom).</li>
+    </ol>
+    <div class="footnote">tokens · mobile-output-tokens.css · spec · MOBILE_REDESIGN_SPEC.md</div>
+  </aside>
+</body>
+</html>

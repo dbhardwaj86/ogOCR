@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ogOCR — Mobile Variants</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="mobile-variants.css" />
+<style>
+  html, body, #root { margin: 0; height: 100%; background: #f0eee8; font-family: 'Inter Tight', system-ui, sans-serif; }
+  /* The iOS frame contains our app, which fills its inner content area */
+  .dc-artboard-inner { display: flex; align-items: center; justify-content: center; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="mobile-variants.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+/* ───── Helpers ───── */
+function Notes({ children }) {
+  return <div style={{
+    background: "#fff", border: "1px solid #e2dfd8", borderRadius: 10, padding: "20px 24px",
+    fontFamily: "'Inter Tight', system-ui, sans-serif", fontSize: 13, lineHeight: 1.65,
+    color: "#3a342c", maxWidth: 1100,
+  }}>{children}</div>;
+}
+function Header({ num, title, sub }) {
+  return <div style={{ marginBottom: 14 }}>
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.16em",
+      textTransform: "uppercase", color: "#c2702e", marginBottom: 6 }}>{num}</div>
+    <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 500,
+      margin: "0 0 6px", letterSpacing: "-0.01em", color: "#2b2620" }}>{title}</h2>
+    <div style={{ color: "#5c574f", fontSize: 13 }}>{sub}</div>
+  </div>;
+}
+
+/* iPhone-15-ish: 390 × 844 portrait, 844 × 390 landscape.
+   IOSDevice draws a 48px-radius bezel; the inner content area starts below
+   the dynamic island and ends above the home indicator. We pass our full
+   app component as children so it fills the device viewport. */
+
+function PortraitFrame({ children, dark = false }) {
+  return <IOSDevice width={390} height={844} dark={dark}>{children}</IOSDevice>;
+}
+
+/* For landscape we render a custom landscape bezel (the IOSDevice frame is
+   portrait-only). 844×390 with a chin/forehead and a left-edge home indicator. */
+function LandscapeFrame({ children, dark = false }) {
+  return (
+    <div style={{
+      width: 844, height: 390, borderRadius: 48, overflow: 'hidden',
+      position: 'relative', background: dark ? '#000' : '#F2F2F7',
+      boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)',
+    }}>
+      {/* dynamic island on left edge (rotated) */}
+      <div style={{
+        position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)',
+        width: 37, height: 126, borderRadius: 24, background: '#000', zIndex: 50,
+      }} />
+      {/* home indicator on right edge */}
+      <div style={{
+        position: 'absolute', right: 8, top: 0, bottom: 0, width: 34,
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        zIndex: 60, pointerEvents: 'none',
+      }}>
+        <div style={{
+          width: 5, height: 139, borderRadius: 100,
+          background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)',
+        }}/>
+      </div>
+      {/* content fills full bezel; app handles its own status/home padding via the design */}
+      <div style={{ position: 'absolute', inset: 0 }}>{children}</div>
+    </div>
+  );
+}
+
+/* ───── Root ───── */
+function Root() {
+  return (
+    <DesignCanvas
+      title="ogOCR — Mobile Variants"
+      subtitle="Calm (A) + Refined (B) · Portrait + Landscape">
+
+      <DCSection id="overview" title="Overview">
+        <DCArtboard id="overview-card" label="Mobile approach" width={1100} height={520}>
+          <Notes>
+            <Header num="A · Calm — mobile" title="Single-task screens, bottom-sheet for everything else"
+              sub="One step visible at a time. Step 1: drop. Step 2: choose intent. Sticky CTA. After extraction, a single ask bar replaces the whole prompt dock." />
+            <ul style={{ paddingLeft: 20, margin: "8px 0 18px" }}>
+              <li><b>Portrait</b> — pure linear flow, library hides in a bottom sheet, sticky Extract button.</li>
+              <li><b>Landscape</b> — two columns: library rail on the left (because horizontal real-estate appears), document area on the right. Same intent picker, no chrome growth.</li>
+            </ul>
+
+            <Header num="B · Refined — mobile" title="Same features, recomposed for thumb-reach"
+              sub="All 8 actions, all 3 view modes, exports, prompt dock and ⌘K all preserved — laid out for the smaller surface." />
+            <ul style={{ paddingLeft: 20, margin: "8px 0 0" }}>
+              <li><b>Portrait</b> — three regions become three bottom tabs: Source · Output · Ask. The action grid sits under the source preview where the focus is.</li>
+              <li><b>Landscape</b> — collapses to a desktop-like 2-column workspace + collapsible library drawer. ⌘K still surfaces.</li>
+            </ul>
+          </Notes>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ───────── A — Calm ───────── */}
+      <DCSection id="a-calm" title="Variant A — Calm">
+        <DCArtboard id="a-port-empty" label="A · Portrait · Step 1 — drop" width={490} height={944}>
+          <PortraitFrame><CalmMobilePortrait /></PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="a-port-ready" label="A · Portrait · Step 2 — choose intent" width={490} height={944}>
+          <PortraitFrame>
+            <CalmPortraitState state="ready"/>
+          </PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="a-port-result" label="A · Portrait · Result + ask bar" width={490} height={944}>
+          <PortraitFrame>
+            <CalmPortraitState state="result"/>
+          </PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="a-land-empty" label="A · Landscape · Step 1 — drop" width={944} height={490}>
+          <LandscapeFrame><CalmMobileLandscape/></LandscapeFrame>
+        </DCArtboard>
+
+        <DCArtboard id="a-land-result" label="A · Landscape · Result + library rail" width={944} height={490}>
+          <LandscapeFrame><CalmLandscapeState/></LandscapeFrame>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ───────── B — Refined ───────── */}
+      <DCSection id="b-refined" title="Variant B — Refined">
+        <DCArtboard id="b-port-source" label="B · Portrait · Source + actions" width={490} height={944}>
+          <PortraitFrame><RefinedMobilePortrait/></PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="b-port-output" label="B · Portrait · Output + view modes" width={490} height={944}>
+          <PortraitFrame><RefinedPortraitTab tab="output"/></PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="b-port-ask" label="B · Portrait · Ask Gemini" width={490} height={944}>
+          <PortraitFrame><RefinedPortraitTab tab="ask"/></PortraitFrame>
+        </DCArtboard>
+
+        <DCArtboard id="b-land" label="B · Landscape · Workspace" width={944} height={490}>
+          <LandscapeFrame><RefinedMobileLandscape/></LandscapeFrame>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+/* Wrappers that pre-set state in CalmMobilePortrait by re-rendering it
+   into specific sub-states without forking the component: we inline a
+   minimal driver that drives the component's UI through clicks on mount. */
+function useDriver(driver) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const t = setTimeout(() => driver(ref.current), 60);
+    return () => clearTimeout(t);
+  }, []);
+  return ref;
+}
+function CalmPortraitState({ state }) {
+  const ref = useDriver(root => {
+    // Click "Tap to choose a file" (.cmp-drop) to jump into ready state
+    const drop = root.querySelector(".cmp-drop");
+    if (drop) drop.click();
+    if (state === "result") {
+      // Pick first intent then click extract; skip processing animation by
+      // forcibly clicking until result. Easiest path: set a tiny timer and
+      // click the first intent + cta repeatedly.
+      requestAnimationFrame(() => {
+        const intent = root.querySelector(".cmp-intent");
+        if (intent) intent.click();
+        requestAnimationFrame(() => {
+          // Force-skip processing: just click extract; processing phase is
+          // brief enough to capture the "result" content shortly after.
+          const cta = root.querySelector(".cmp-cta");
+          if (cta) cta.click();
+        });
+      });
+    }
+  });
+  return <div ref={ref} style={{height:"100%"}}><CalmMobilePortrait/></div>;
+}
+function CalmLandscapeState() {
+  const ref = useDriver(root => {
+    const row = root.querySelector(".cml-side-row");
+    if (row) row.click();
+    requestAnimationFrame(() => {
+      const intent = root.querySelector(".cml-intent");
+      if (intent) intent.click();
+      requestAnimationFrame(() => {
+        const cta = root.querySelector(".cml-cta");
+        if (cta) cta.click();
+      });
+    });
+  });
+  return <div ref={ref} style={{height:"100%"}}><CalmMobileLandscape/></div>;
+}
+function RefinedPortraitTab({ tab }) {
+  const ref = useDriver(root => {
+    const buttons = root.querySelectorAll(".rmp-tabs button");
+    const idx = tab === "source" ? 0 : tab === "output" ? 1 : 2;
+    if (buttons[idx]) buttons[idx].click();
+  });
+  return <div ref={ref} style={{height:"100%"}}><RefinedMobilePortrait/></div>;
+}
+
+/* ───── mount ───── */
+function App(){ return <Root/>; }
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
