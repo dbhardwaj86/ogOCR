@@ -7,6 +7,7 @@ import 'katex/dist/katex.min.css';
 import { sanitizeSvg } from '../svgSanitize';
 import { stripDetectedLang } from '../magicActions';
 import { ERRORS } from '../errors/codes';
+import EquationBlock from './EquationBlock';
 
 // Sprint 2.8a — detect a fenced ```mermaid block in extracted text. Exported
 // for testability so the unit suite doesn't have to lazy-load mermaid itself.
@@ -148,7 +149,7 @@ function MermaidEditor({ initialCode, onChange }) {
   );
 }
 
-function RenderedDoc({ text, svg, images, mode }) {
+function RenderedDoc({ text, svg, images, mode, onChangeText }) {
   // Sprint 2.8b — strip the trailing `__detected_lang` line so the user only
   // sees the content; the chip in SourceColumn already exposes the code.
   const cleanText = stripDetectedLang(text);
@@ -156,6 +157,17 @@ function RenderedDoc({ text, svg, images, mode }) {
   const hasSvg = !!(svg && svg.trim());
   const hasImages = Array.isArray(images) && images.length > 0;
   const mermaidCode = detectMermaidBlock(cleanText);
+
+  // Sprint 3.1 — equation mode: live LaTeX preview pane. Bypasses the
+  // markdown render path entirely. Wires the textarea back to the session
+  // text via the optional `onChangeText` callback.
+  if (mode === 'equation') {
+    return (
+      <article className="og-rendered og-rendered--equation">
+        <EquationBlock value={text || ''} onChange={onChangeText} />
+      </article>
+    );
+  }
 
   // Sprint 2.8a — diagram mode: live editor pane. We seed the editor from any
   // detected fenced block in the cleaned text, falling back to the raw
