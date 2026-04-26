@@ -109,6 +109,9 @@ export const ERRORS = Object.freeze({
   OCR_BAD_FILE: entry('OCR_BAD_FILE', SURFACE.TOAST, SEVERITY.WARN,
     'Upload a file before running an action.',
     'Drop or pick a file in the Library rail.', false),
+  OCR_MERMAID_RENDER_FAIL: entry('OCR_MERMAID_RENDER_FAIL', SURFACE.INLINE, SEVERITY.WARN,
+    "We couldn't render that diagram.",
+    'Check the Mermaid syntax — the parser pointed at the line below.'),
 
   // ── Export ──────────────────────────────────────────────────────────
   EXP_EMAIL_SMTP_AUTH: entry('EXP_EMAIL_SMTP_AUTH', SURFACE.MODAL, SEVERITY.ERROR,

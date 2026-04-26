@@ -2367,16 +2367,21 @@ kbd, code { font-family: var(--mono); }
   min-height: 28px;
 }
 .og-proc-cancel:hover { background: var(--bg-tint); }
+/* Sprint 2.8c — once the deterministic fake-progress sim caps at 95% the
+   bar swaps into "still working" mode: a 30%-wide accent stripe that
+   marches across the track on a 1.4s linear loop. The width override and
+   transform-only animation replace the prior background-position trick;
+   transform is GPU-accelerated and avoids the slight wobble that the
+   gradient version had on Windows Firefox. */
 .og-proc-bar.is-indeterminate .og-proc-bar-fill {
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
-  animation: og-indeterminate 1.4s infinite linear;
-  width: 100% !important;
+  width: 30% !important;
+  background: var(--accent);
+  transition: none;
+  animation: og-progress-march 1.4s linear infinite;
 }
-@keyframes og-indeterminate {
-  0%   { background-position: -50% 0; }
-  100% { background-position: 150% 0; }
+@keyframes og-progress-march {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(400%); }
 }
 
 /* Diagnostics panel */
@@ -2458,6 +2463,120 @@ kbd, code { font-family: var(--mono); }
  * distinct from the Preview/Markdown peer toggles. */
 .og-pill-secondary { opacity: 0.85; }
 .og-pill-secondary:hover { opacity: 1; }
+
+/* Sprint 2.8a — Diagram pill. Sits next to Refine when the active session
+   has a mermaid block; styled like the peer pills but with the accent
+   colour boosted to hint that the click flips into an editor pane. */
+.og-pill-diagram { color: var(--accent-ink); }
+.og-pill-diagram.is-active {
+  background: var(--bg-card);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+/* Sprint 2.8b — LanguagePill chip in the SourceColumn head. Tiny mono
+   uppercase chip riding the right edge of the header row. */
+.og-lang-pill {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--r-chip);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1px solid oklch(from var(--accent) l c h / 0.3);
+  white-space: nowrap;
+  margin-left: 12px;
+}
+
+/* Sprint 2.8a — Mermaid live-editor split layout. Code on the left, SVG
+   on the right; collapses to stacked rows on narrow viewports. */
+.og-rendered--diagram { max-width: none; padding: 0; }
+.og-mermaid-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-height: 360px;
+  align-items: stretch;
+}
+.og-mermaid-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  padding: 12px;
+  min-width: 0;
+}
+.og-mermaid-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.og-mermaid-textarea {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg-deep);
+  border: 1px solid var(--rule);
+  padding: 10px;
+  resize: vertical;
+  min-height: 240px;
+}
+.og-mermaid-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.og-mermaid-preview {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  background: var(--bg-deep);
+  border: 1px solid var(--rule);
+  padding: 12px;
+  overflow: auto;
+  min-height: 240px;
+}
+.og-mermaid-preview svg { max-width: 100%; height: auto; }
+.og-mermaid-preview--empty {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
+.og-mermaid-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: oklch(from var(--accent) l c h / 0.06);
+  border: 1px solid oklch(from var(--accent) l c h / 0.4);
+  font-size: 12px;
+  color: var(--ink);
+}
+.og-mermaid-error-title { font-weight: 600; color: var(--accent-ink); }
+.og-mermaid-error-hint { color: var(--ink-soft); }
+.og-mermaid-error-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-deep);
+  padding: 8px;
+  border: 1px solid var(--rule);
+  white-space: pre-wrap;
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+}
+@media (max-width: 880px) {
+  .og-mermaid-editor { grid-template-columns: 1fr; }
+}
 
 @media print {
   @page { margin: 1cm; }
