@@ -6,6 +6,7 @@ import OutputColumn from './components/OutputColumn';
 import MobileTabs from './components/MobileTabs';
 import CommandPalette from './components/CommandPalette';
 import UploadConfirmModal from './components/UploadConfirmModal';
+import BatchActionPrompt from './components/BatchActionPrompt';
 import WelcomeModal from './components/WelcomeModal';
 import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
@@ -33,7 +34,7 @@ import {
   blobToDataURL,
   dataURLToBlob,
 } from './storage/idb';
-import { setRunner as setQueueRunner, updateProgress as updateQueueProgress } from './queue.js';
+import { enqueue as queueEnqueue, setRunner as setQueueRunner, updateProgress as updateQueueProgress } from './queue.js';
 
 // --- Initial-state loaders run once at module load (Strict Mode safe). ---
 function readJSON(key, fallback) {
@@ -154,6 +155,7 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [compileOpen, setCompileOpen] = useState(false);
   const [pendingPreviewFile, setPendingPreviewFile] = useState(null);
+  const [pendingBatchFiles, setPendingBatchFiles] = useState(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   // Deep-link → output: if the URL targeted a real session, jump straight to
   // the Output pane on mobile so the user sees their work, not the upload card.
@@ -1004,6 +1006,7 @@ function App() {
           deleteSession={deleteSession}
           onUpload={handleUpload}
           onRequestPreview={setPendingPreviewFile}
+          onRequestBatchAction={setPendingBatchFiles}
         />
         <SourceColumn
           session={activeSession}
@@ -1026,6 +1029,7 @@ function App() {
             onRetry={retryLastAction}
             onDismissError={clearLastError}
             hasFile={!!file}
+            sessionCount={sessions.length}
           />
         </ErrorBoundary>
       </main>
@@ -1043,6 +1047,19 @@ function App() {
           file={pendingPreviewFile}
           onConfirm={(f) => { setPendingPreviewFile(null); handleUpload(f); }}
           onCancel={() => setPendingPreviewFile(null)}
+        />
+      )}
+
+      {pendingBatchFiles && (
+        <BatchActionPrompt
+          files={pendingBatchFiles}
+          onConfirm={(actionId) => {
+            const batch = pendingBatchFiles;
+            setPendingBatchFiles(null);
+            for (const f of batch) queueEnqueue(f, actionId);
+            showToast(`Queued ${batch.length} file${batch.length === 1 ? '' : 's'} — running sequentially.`);
+          }}
+          onCancel={() => setPendingBatchFiles(null)}
         />
       )}
 

@@ -2,7 +2,7 @@ import UploadCard from './UploadCard';
 import SessionList from './SessionList';
 import QueueRail from './QueueRail';
 
-function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSession, onUpload, onRequestPreview }) {
+function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSession, onUpload, onRequestPreview, onRequestBatchAction }) {
   return (
     <aside className="og-rail">
       <div className="og-rail-section">
@@ -10,7 +10,11 @@ function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSess
           <span className="og-section-num">01</span>
           <span>Source</span>
         </div>
-        <UploadCard onUpload={onUpload} onRequestPreview={onRequestPreview} />
+        <UploadCard
+          onUpload={onUpload}
+          onRequestPreview={onRequestPreview}
+          onRequestBatchAction={onRequestBatchAction}
+        />
       </div>
 
       <QueueRail />

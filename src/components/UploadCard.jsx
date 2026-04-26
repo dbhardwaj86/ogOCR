@@ -1,18 +1,18 @@
 import { useRef, useState } from 'react';
 import CornerBracket from './CornerBracket';
 import { showError } from '../errors/showError';
-import { enqueue as queueEnqueue } from '../queue.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_QUEUE_FILES = 20;
 const ACCEPTED_TYPE_RE = /^(image\/|application\/pdf$)/;
 
-// Every drop / pick / camera-capture is routed through `onRequestPreview` so
-// the user lands in the UploadConfirmModal "Use this file" confirmation step.
-// The hidden long-press shortcut from earlier sprints is gone — confirmation
-// is the default path. `onUpload` remains as a fallback if a parent doesn't
-// wire the preview flow.
-function UploadCard({ onUpload, onRequestPreview }) {
+// Single-file drops route through `onRequestPreview` (UploadConfirmModal).
+// Multi-file drops route through `onRequestBatchAction` (BatchActionPrompt)
+// so the user picks one action that applies to every file in the batch —
+// without it the queue runner would silently flatten the batch to text
+// extraction. `onUpload` remains as a fallback if a parent doesn't wire
+// the preview flow.
+function UploadCard({ onUpload, onRequestPreview, onRequestBatchAction }) {
   const inputRef = useRef(null);
   const cameraRef = useRef(null);
   const [active, setActive] = useState(false);
@@ -54,26 +54,19 @@ function UploadCard({ onUpload, onRequestPreview }) {
       if (validate(f)) handFile(f);
       return;
     }
-    // Multi-file: enqueue each valid file. Drop the >20 batch entirely with
-    // a warning rather than silently truncating — a partial enqueue would
-    // hide which files got skipped.
+    // Multi-file: drop the >20 batch entirely with a warning rather than
+    // silently truncating — a partial enqueue would hide which files got
+    // skipped.
     if (files.length > MAX_QUEUE_FILES) {
       showError('QUEUE_OVERFLOW');
       return;
     }
-    let enqueued = 0;
-    for (const f of files) {
-      if (!validate(f)) continue;
-      queueEnqueue(f, 'text');
-      enqueued += 1;
-    }
-    if (enqueued > 0) {
-      // Surface the multi-drop affordance with the (now-updated) info copy
-      // so the user knows the queue is processing.
-      showError('CAP_MULTI_FILE', {
-        message: `Queued ${enqueued} files.`,
-        hint: 'They will run sequentially — watch the queue in the rail.',
-      });
+    // Validate up front so the action prompt only ever sees keepable files.
+    // `validate` already surfaces a per-file toast for each rejection.
+    const valid = files.filter(validate);
+    if (valid.length === 0) return;
+    if (onRequestBatchAction) {
+      onRequestBatchAction(valid);
     }
   };
 

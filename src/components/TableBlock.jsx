@@ -33,7 +33,14 @@ function splitRow(line) {
 export function parseGfmTable(markdown) {
   if (typeof markdown !== 'string' || !markdown) return null;
   const lines = markdown.split(/\r?\n/);
+  // Track ``` fence state so a pipe-table that lives *inside* a code block
+  // doesn't get hijacked into the editable TableBlock — the user wanted the
+  // fence to render verbatim.
+  const isFence = (line) => /^\s*(`{3,}|~{3,})/.test(line);
+  let inFence = false;
   for (let i = 0; i < lines.length - 1; i++) {
+    if (isFence(lines[i])) { inFence = !inFence; continue; }
+    if (inFence) continue;
     const headerLine = lines[i];
     const sepLine = lines[i + 1];
     if (!PIPE_LINE.test(headerLine)) continue;
@@ -46,6 +53,8 @@ export function parseGfmTable(markdown) {
     const rows = [];
     for (let j = i + 2; j < lines.length; j++) {
       const row = lines[j];
+      // A fence inside the table body terminates the table.
+      if (isFence(row)) break;
       if (!PIPE_LINE.test(row)) break;
       // Stop if the row turns out to be another separator (rare but possible
       // in malformed input).
@@ -149,61 +158,53 @@ function TableBlock({ headers: headersIn, rows: rowsIn, onChange, filename }) {
     }
   }, [onChange]);
 
+  // State updaters compute the next value from current state and call setters
+  // and `fire()` sequentially. Calling `fire()` inside a functional updater
+  // makes it a side-effecting (impure) updater, which React 18 Strict Mode
+  // double-invokes — that would dispatch `onChange` twice per user action.
   const commitHeader = (col, value) => {
-    setHeaders((prev) => {
-      if (prev[col] === value) return prev;
-      const next = [...prev];
-      next[col] = value;
-      fire(next, rows);
-      return next;
-    });
+    if (headers[col] === value) return;
+    const next = [...headers];
+    next[col] = value;
+    setHeaders(next);
+    fire(next, rows);
   };
 
   const commitCell = (row, col, value) => {
-    setRows((prev) => {
-      if (prev[row]?.[col] === value) return prev;
-      const next = prev.map((r, i) => (i === row ? [...r] : r));
-      if (!next[row]) next[row] = headers.map(() => '');
-      next[row][col] = value;
-      fire(headers, next);
-      return next;
-    });
+    if (rows[row]?.[col] === value) return;
+    const next = rows.map((r, i) => (i === row ? [...r] : r));
+    if (!next[row]) next[row] = headers.map(() => '');
+    next[row][col] = value;
+    setRows(next);
+    fire(headers, next);
   };
 
   const sortBy = (col, dir) => {
-    setRows((prev) => {
-      const sign = dir === 'desc' ? -1 : 1;
-      const next = [...prev].sort((a, b) => {
-        const av = (a[col] ?? '').toString();
-        const bv = (b[col] ?? '').toString();
-        if (av < bv) return -1 * sign;
-        if (av > bv) return 1 * sign;
-        return 0;
-      });
-      fire(headers, next);
-      return next;
+    const sign = dir === 'desc' ? -1 : 1;
+    const next = [...rows].sort((a, b) => {
+      const av = (a[col] ?? '').toString();
+      const bv = (b[col] ?? '').toString();
+      if (av < bv) return -1 * sign;
+      if (av > bv) return 1 * sign;
+      return 0;
     });
+    setRows(next);
+    fire(headers, next);
   };
 
   const addRow = () => {
-    setRows((prev) => {
-      const blank = headers.map(() => '');
-      const next = [...prev, blank];
-      fire(headers, next);
-      return next;
-    });
+    const blank = headers.map(() => '');
+    const next = [...rows, blank];
+    setRows(next);
+    fire(headers, next);
   };
 
   const addCol = () => {
-    setHeaders((prevHeaders) => {
-      const nextHeaders = [...prevHeaders, `Column ${prevHeaders.length + 1}`];
-      setRows((prevRows) => {
-        const nextRows = prevRows.map((r) => [...r, '']);
-        fire(nextHeaders, nextRows);
-        return nextRows;
-      });
-      return nextHeaders;
-    });
+    const nextHeaders = [...headers, `Column ${headers.length + 1}`];
+    const nextRows = rows.map((r) => [...r, '']);
+    setHeaders(nextHeaders);
+    setRows(nextRows);
+    fire(nextHeaders, nextRows);
   };
 
   const exportCsv = () => {
