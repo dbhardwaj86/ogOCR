@@ -23,6 +23,13 @@ import {
   migrateCompile,
 } from './compile';
 import { readSessionParam, urlWithoutSessionParam, resolveSessionId } from './deepLink';
+import {
+  getImage as idbGetImage,
+  setImage as idbSetImage,
+  deleteImage as idbDeleteImage,
+  blobToDataURL,
+  dataURLToBlob,
+} from './storage/idb';
 
 // --- Initial-state loaders run once at module load (Strict Mode safe). ---
 function readJSON(key, fallback) {
@@ -38,18 +45,46 @@ function readJSON(key, fallback) {
 
 // Schema version. v2 added structured `session.images`. v3 adds
 // `session.refinements` — a sibling block of AI-rewritten text keyed by
-// tone (`summary` / `bullets` / `formal` / `casual`). The migration is a
-// no-op for the new field (default `null`/`undefined` is fine) — we just
-// stamp the version so we don't re-migrate on every boot.
-const SESSION_SCHEMA_VERSION = 3;
+// tone (`summary` / `bullets` / `formal` / `casual`). v4 moves
+// `session.images[i].data` blobs out of localStorage and into IndexedDB
+// (CRIT-1): localStorage was overflowing the 5 MB quota, triggering the
+// circuit breaker that drops the oldest session and silently destroys data.
+// The on-disk shape stores only `{id, desc}` per image; `data` is hydrated
+// back into memory from IDB when a session becomes active. The migration
+// from v3 → v4 happens asynchronously after mount (see migrateLegacySessions
+// effect below) — synchronous migration would require blocking the initial
+// render on IDB writes.
+const SESSION_SCHEMA_VERSION = 4;
 
 function migrateSession(s) {
   if (!s || typeof s !== 'object') return s;
   if (s.version === SESSION_SCHEMA_VERSION) return s;
-  // v1 → v2 → v3: leave existing text/svg/images in place; just stamp the
-  // version so we don't re-migrate. `refinements` defaults to undefined and
-  // is populated lazily on the first refine action.
+  // v1 → v2 → v3 → v4: leave existing text/svg/images in place synchronously.
+  // `refinements` defaults to undefined and is populated lazily on the first
+  // refine action. v3 → v4 image data migration is handled by the async
+  // migrateLegacySessions effect after first mount; we still stamp the
+  // version here so a session loaded from localStorage with no images
+  // (i.e. nothing to migrate) doesn't get re-touched.
   return { ...s, version: SESSION_SCHEMA_VERSION };
+}
+
+// Strip the `data` field from each image entry so blobs never round-trip
+// through localStorage. Read paths re-hydrate from IDB on session activate.
+function stripImageData(sessions) {
+  if (!Array.isArray(sessions)) return sessions;
+  return sessions.map(s => {
+    if (!s || !Array.isArray(s.images)) return s;
+    return {
+      ...s,
+      images: s.images.map(img => {
+        if (!img || typeof img !== 'object') return img;
+        // Drop `data` entirely — IDB is the source of truth for blobs.
+        // eslint-disable-next-line no-unused-vars
+        const { data, ...rest } = img;
+        return rest;
+      }),
+    };
+  });
 }
 
 const initialSessions = (() => {
@@ -140,10 +175,14 @@ function App() {
   const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
   // Persist sessions + active id (debounced to avoid per-keystroke writes).
+  // v4: image blobs are stored in IndexedDB, not localStorage — strip
+  // `images[i].data` before serializing so a single Base64 PNG can no longer
+  // single-handedly blow past the 5 MB quota and trip the circuit breaker.
   useEffect(() => {
     const t = setTimeout(() => {
       try {
-        localStorage.setItem('ogOCR_sessions', JSON.stringify(sessions));
+        const safeSessions = stripImageData(sessions);
+        localStorage.setItem('ogOCR_sessions', JSON.stringify(safeSessions));
         if (activeSessionId) {
           localStorage.setItem('ogOCR_active_session', activeSessionId);
         } else {
@@ -197,6 +236,90 @@ function App() {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('ogOCR_theme', theme); } catch { /* ignore */ }
   }, [theme]);
+
+  // One-shot migration of legacy v3 sessions: any image entry whose `data`
+  // is still a `data:` URL (left over from before v4) gets lifted into IDB
+  // under its existing `id`, and the in-memory `data` field is cleared so
+  // the next persistence write strips it from localStorage. The async work
+  // runs after first mount so the initial render isn't blocked.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let pendingPatches = null;
+      for (const s of sessions) {
+        if (!s || !Array.isArray(s.images)) continue;
+        for (const img of s.images) {
+          const data = img?.data;
+          if (typeof data !== 'string' || !data.startsWith('data:')) continue;
+          try {
+            const blob = await dataURLToBlob(data);
+            if (blob) await idbSetImage(img.id, blob);
+            pendingPatches = pendingPatches || new Map();
+            const patch = pendingPatches.get(s.id) || new Set();
+            patch.add(img.id);
+            pendingPatches.set(s.id, patch);
+          } catch (e) {
+            // Don't tear the whole batch on a single bad entry — log and move on.
+            console.warn('IDB migration failed for image', img?.id, e);
+          }
+        }
+      }
+      if (cancelled || !pendingPatches) return;
+      // Clear `data` from migrated entries so the next persistence pass writes
+      // metadata-only sessions to localStorage.
+      setSessions(prev => prev.map(s => {
+        const ids = pendingPatches.get(s.id);
+        if (!ids || !Array.isArray(s.images)) return s;
+        return {
+          ...s,
+          images: s.images.map(img => (ids.has(img.id) ? { ...img, data: null } : img)),
+        };
+      }));
+    })();
+    return () => { cancelled = true; };
+    // We deliberately run this only on first mount (using initialSessions).
+    // Re-running on every `sessions` change would loop forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When a session becomes active, hydrate its image blobs back into the
+  // in-memory state so RenderedDoc / CompileBuilder can keep using
+  // `images[i].data` as a usable image source. The hydration is targeted —
+  // we only fetch images for the active session, not the entire history.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const target = sessions.find(s => s.id === activeSessionId);
+    if (!target || !Array.isArray(target.images) || target.images.length === 0) return;
+
+    // Skip if every image already has a usable `data` value — avoids re-running
+    // hydration after the user edits text on an already-hydrated session.
+    const needsHydration = target.images.some(img => !img?.data);
+    if (!needsHydration) return;
+
+    let cancelled = false;
+    (async () => {
+      const next = await Promise.all(target.images.map(async (img) => {
+        if (img?.data) return img;
+        if (!img?.id) return img;
+        try {
+          const blob = await idbGetImage(img.id);
+          if (!blob) return img;
+          const dataURL = await blobToDataURL(blob);
+          return { ...img, data: dataURL };
+        } catch (e) {
+          console.warn('IDB hydrate failed for image', img.id, e);
+          return img;
+        }
+      }));
+      if (cancelled) return;
+      // Bail out if nothing actually changed — prevents a setState loop with
+      // the persistence effect.
+      const changed = next.some((img, i) => img !== target.images[i]);
+      if (!changed) return;
+      setSessions(prev => prev.map(s => (s.id === activeSessionId ? { ...s, images: next } : s)));
+    })();
+    return () => { cancelled = true; };
+  }, [activeSessionId, sessions]);
 
   // Deep-link boot: the `?session=<id>` param has already been consumed at
   // module load — it resolved into `bootActiveId` / `deepLinkSessionId` above
@@ -294,7 +417,18 @@ function App() {
   }, [activeSessionId]);
 
   const deleteSession = useCallback((id) => {
-    setSessions(prev => prev.filter(s => s.id !== id));
+    setSessions(prev => {
+      // Cascade-delete any image blobs owned by the dropped session so IDB
+      // doesn't accumulate orphans. Best-effort — failures here just leave
+      // a few extra blobs behind; they won't block the UI.
+      const dropped = prev.find(s => s.id === id);
+      if (dropped && Array.isArray(dropped.images)) {
+        for (const img of dropped.images) {
+          if (img?.id) idbDeleteImage(img.id).catch(() => {});
+        }
+      }
+      return prev.filter(s => s.id !== id);
+    });
     setActiveSessionId(curr => curr === id ? null : curr);
   }, []);
 
@@ -447,8 +581,32 @@ function App() {
           // on `session.images`. RenderedDoc renders the grid natively; the
           // text field stores only the summary line so the markdown path still
           // works as a fallback for older renderers.
+          // v4: also persist each blob to IDB. The in-memory copy keeps the
+          // `data:` URL so the active render is instant; the persistence
+          // effect strips it before localStorage so the quota-overflow path
+          // is unreachable. If IDB write fails (quota), we surface IDB_QUOTA
+          // but keep the in-memory state intact so the user still sees the
+          // result for this session.
           updates.images = data.images;
           updates.svg = '';
+          // Fire-and-forget: the user shouldn't wait for IDB to acknowledge
+          // before seeing the extracted images. Errors are routed through
+          // showError so a quota miss is visible.
+          (async () => {
+            for (const img of data.images) {
+              if (!img?.id || typeof img?.data !== 'string') continue;
+              try {
+                const blob = await dataURLToBlob(img.data);
+                if (blob) await idbSetImage(img.id, blob);
+              } catch (e) {
+                if (e?.code === 'IDB_QUOTA') {
+                  showError('IDB_QUOTA');
+                  break;
+                }
+                console.warn('IDB store failed for image', img.id, e);
+              }
+            }
+          })();
           if (data.images.length === 0) {
             updates.text = '_No visual components found in this document._';
           } else {

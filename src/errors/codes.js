@@ -186,6 +186,17 @@ export const ERRORS = Object.freeze({
   EXP_LOAD_OK: entry('EXP_LOAD_OK', SURFACE.TOAST, SEVERITY.INFO,
     'Loaded.', null, false),
   EXP_OK: entry('EXP_OK', SURFACE.TOAST, SEVERITY.INFO, 'Done.', null, false),
+
+  // ── IndexedDB image storage ─────────────────────────────────────────
+  IDB_QUOTA: entry('IDB_QUOTA', SURFACE.MODAL, SEVERITY.ERROR,
+    'Browser storage is full.',
+    'Free space in your browser, or delete older sessions to keep saving images.'),
+  IDB_INIT_FAIL: entry('IDB_INIT_FAIL', SURFACE.TOAST, SEVERITY.ERROR,
+    "Couldn't open the image database.",
+    'Reload the page. If it keeps failing, your browser may be in private mode.'),
+  IDB_MIGRATION_FAIL: entry('IDB_MIGRATION_FAIL', SURFACE.TOAST, SEVERITY.WARN,
+    "Couldn't migrate older session images.",
+    'Old images stay where they were. New images will use the new storage.'),
 });
 
 export function getError(code) {
