@@ -62,6 +62,55 @@ export const MAGIC_ACTIONS = [
 
 export const ACTION_GROUPS = ['Text', 'Structure', 'Symbol', 'Visual'];
 
+// Refine actions reuse the /api/extract endpoint to rewrite the active
+// session's extracted text into one of four canned tones. They share the
+// magic-action wire shape (id/label/hint/prompt) but are a separate group
+// — they don't operate on the uploaded file, they refine `session.text`.
+// Each prompt ends with a strict markdown directive so the response slots
+// cleanly into the existing ReactMarkdown render path.
+export const REFINE_ACTIONS = [
+  {
+    id: 'refine-summary',
+    label: 'Summary',
+    hint: 'Three-sentence summary of the source',
+    kind: 'summary',
+    prompt: 'Summarize the following text in exactly three sentences. Capture the most important points and keep the tone neutral. Output markdown only — no preamble.',
+  },
+  {
+    id: 'refine-bullets',
+    label: 'Bullets',
+    hint: 'Concise bullet list of the key points',
+    kind: 'bullets',
+    prompt: 'Rewrite the following text as a concise markdown bullet list. Each bullet must be a single short sentence covering one key point. Output markdown only — no preamble.',
+  },
+  {
+    id: 'refine-formal',
+    label: 'Formal',
+    hint: 'Formal, professional rewrite',
+    kind: 'formal',
+    prompt: 'Rewrite the following text in a formal, professional tone. Keep the meaning unchanged but elevate the diction and sentence structure. Output markdown only — no preamble.',
+  },
+  {
+    id: 'refine-casual',
+    label: 'Casual',
+    hint: 'Casual, friendly rewrite',
+    kind: 'casual',
+    prompt: 'Rewrite the following text in a casual, friendly tone — as if explaining it to a friend. Keep the meaning unchanged. Output markdown only — no preamble.',
+  },
+];
+
+// Map id → refinement key on session.refinements. Stable union with the
+// 8 magic-action ids; do not collide.
+export const REFINE_KIND_BY_ID = REFINE_ACTIONS.reduce((acc, a) => {
+  acc[a.id] = a.kind;
+  return acc;
+}, {});
+
+export const REFINE_LABEL_BY_KIND = REFINE_ACTIONS.reduce((acc, a) => {
+  acc[a.kind] = a.label;
+  return acc;
+}, {});
+
 export const KIND_LABEL = {
   text: 'Plain text',
   handwriting: 'Handwriting',
