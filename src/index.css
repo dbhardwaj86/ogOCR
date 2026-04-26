@@ -903,7 +903,83 @@ kbd, code { font-family: var(--mono); }
   color: var(--ink);
   cursor: pointer;
 }
-.og-drive-folder-item:hover { background: var(--bg-tint); color: var(--accent-ink); }
+.og-drive-folder-item:hover,
+.og-drive-folder-item.is-active { background: var(--bg-tint); color: var(--accent-ink); }
+
+/* ----- Save / Share / Export dropdown menus ----- */
+.og-export-menu { position: relative; display: inline-flex; }
+.og-export-menu-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--tx-fast, 0.14s) ease,
+              color var(--tx-fast, 0.14s) ease,
+              background var(--tx-fast, 0.14s) ease;
+}
+.og-export-menu-btn:hover,
+.og-export-menu-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.og-export-menu-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.og-export-menu-caret {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.og-export-menu-list {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  z-index: 40;
+  list-style: none; margin: 0; padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-tile, 8px);
+  min-width: 180px;
+  box-shadow: 0 12px 28px oklch(from var(--ink) l c h / 0.14);
+}
+.og-export-menu-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+  transition: background var(--tx-fast, 0.14s) ease, color var(--tx-fast, 0.14s) ease;
+}
+.og-export-menu-item:hover:not(:disabled),
+.og-export-menu-item:focus-visible {
+  background: var(--bg-tint);
+  color: var(--accent-ink);
+  outline: none;
+}
+.og-export-menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
+.og-export-menu-item .og-export-glyph {
+  font-family: var(--serif);
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.og-export-menu-item:hover:not(:disabled) .og-export-glyph,
+.og-export-menu-item:focus-visible:not(:disabled) .og-export-glyph {
+  color: var(--accent);
+}
+
+/* Mobile FAB + bottom sheet — desktop hides the FAB; the @media (max-width: 880px)
+   block at the bottom of the file flips the FAB on and hides the menu strip. */
+.og-share-fab { display: none; }
+.og-share-sheet-shroud { display: none; }
 
 /* Inline filename rename input (Output column head). */
 .og-output-rename {
@@ -2116,6 +2192,87 @@ kbd, code { font-family: var(--mono); }
     scroll-snap-align: start;
     white-space: nowrap;
     font-size: 12px;
+  }
+
+  /* On phones the inline ExportBar collapses out of the way and a single FAB
+     replaces it. Tapping the FAB tries navigator.share, falling back to the
+     bottom-sheet that mirrors the 3-menu groups. */
+  .og-exports { display: none; }
+  .og-share-fab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right));
+    bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px);
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: white;
+    font-family: var(--serif);
+    font-size: 22px;
+    cursor: pointer;
+    box-shadow: 0 8px 22px oklch(from var(--ink) l c h / 0.22);
+    z-index: 50;
+  }
+  .og-share-fab:hover:not(:disabled) { filter: brightness(1.06); }
+  .og-share-fab:disabled { opacity: 0.35; cursor: not-allowed; }
+  .og-share-fab:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .og-share-sheet-shroud {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    background: oklch(0 0 0 / 0.35);
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 80;
+  }
+  .og-share-sheet {
+    width: 100%;
+    max-height: 80dvh;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    padding: 14px 16px max(20px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .og-share-sheet-grip {
+    width: 40px; height: 4px;
+    background: var(--rule);
+    border-radius: 2px;
+    align-self: center;
+    margin-bottom: 4px;
+  }
+  .og-share-sheet-group {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .og-share-sheet-label {
+    font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .og-share-sheet-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 6px;
+  }
+  .og-share-sheet-close {
+    align-self: stretch;
+    margin-top: 4px;
+    padding: 12px;
+    background: var(--bg-deep);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    color: var(--ink);
+    cursor: pointer;
   }
 
   /* PromptDock: input + Run on a single row */
