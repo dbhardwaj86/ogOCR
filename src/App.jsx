@@ -11,7 +11,8 @@ import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ErrorBoundary from './components/ErrorBoundary';
-import { MAGIC_ACTIONS, REFINE_ACTIONS, REFINE_KIND_BY_ID } from './magicActions';
+import { publishLanguageOverrides } from './components/LanguagePill';
+import { MAGIC_ACTIONS, REFINE_ACTIONS, REFINE_KIND_BY_ID, LANGUAGE_OVERRIDE_PROMPT } from './magicActions';
 import { showError, installErrorSinks, showInfo } from './errors/showError';
 import { errFromResponse, errFromException } from './errors/errFromResponse';
 import { formatMessage } from './errors/codes';
@@ -21,6 +22,8 @@ import {
   ACTIVE_COMPILE_KEY,
   createCompile as makeCompile,
   migrateCompile,
+  migrateCompileImagesToIDB,
+  compileNeedsIDBOffload,
 } from './compile';
 import { readSessionParam, urlWithoutSessionParam, resolveSessionId } from './deepLink';
 import {
@@ -238,6 +241,18 @@ function App() {
     try { localStorage.setItem('ogOCR_theme', theme); } catch { /* ignore */ }
   }, [theme]);
 
+  // Track K — broadcast the per-session language overrides so LanguagePill
+  // (mounted by SourceColumn, which doesn't forward arbitrary props) can
+  // render the `(override)` suffix accurately. The publication is just a
+  // module-level signal store inside LanguagePill.jsx, not a global event.
+  useEffect(() => {
+    const map = {};
+    for (const s of sessions) {
+      if (s?.id && s?.languageOverride) map[s.id] = s.languageOverride;
+    }
+    publishLanguageOverrides({ activeSessionId, map });
+  }, [sessions, activeSessionId]);
+
   // One-shot migration of legacy v3 sessions: any image entry whose `data`
   // is still a `data:` URL (left over from before v4) gets lifted into IDB
   // under its existing `id`, and the in-memory `data` field is cleared so
@@ -280,6 +295,39 @@ function App() {
     return () => { cancelled = true; };
     // We deliberately run this only on first mount (using initialSessions).
     // Re-running on every `sessions` change would loop forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Track K — one-shot migration of legacy v1 compiles. Any block of kind
+  // `image` whose `src` is still a `data:` URL gets lifted into IDB under
+  // a fresh `cimg_<id>` key; `block.src` is rewritten to `idb:cimg_<id>`.
+  // Mirror of the v3 → v4 session image migration above. Runs once after
+  // first mount so the initial render isn't blocked. Idempotent — a
+  // compile that's already on v2 with no `data:` blocks is left alone.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const targets = compiles.filter(compileNeedsIDBOffload);
+      if (targets.length === 0) return;
+      const updated = new Map();
+      for (const c of targets) {
+        try {
+          const next = await migrateCompileImagesToIDB(c);
+          if (next !== c) updated.set(c.id, next);
+        } catch (e) {
+          if (e?.code === 'IDB_QUOTA') {
+            showError('IDB_QUOTA');
+            break;
+          }
+          console.warn('compile IDB migration failed for', c.id, e);
+        }
+      }
+      if (cancelled || updated.size === 0) return;
+      setCompiles(prev => prev.map(c => updated.get(c.id) || c));
+    })();
+    return () => { cancelled = true; };
+    // First-mount only — re-running on every `compiles` change would loop
+    // because the effect itself updates state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -485,9 +533,16 @@ function App() {
     }, 220);
   }, [stopProgress]);
 
-  const runAction = useCallback(async (actionId, customPromptOverride) => {
+  // Track K — runAction accepts a `languageOverride` (ISO code or 'auto')
+  // as a third argument or via an options object. When set, the action's
+  // base prompt is wrapped by LANGUAGE_OVERRIDE_PROMPT so Gemini treats
+  // the document as written in the chosen language and keeps emitting the
+  // trailing __detected_lang line. Passing 'auto' (or omitting) falls
+  // through to the base prompt.
+  const runAction = useCallback(async (actionId, customPromptOverride, opts = {}) => {
     const refineAction = REFINE_ACTIONS.find(a => a.id === actionId);
     const isRefine = !!refineAction;
+    const languageOverride = (opts && typeof opts === 'object') ? opts.languageOverride : null;
 
     // Refine actions skip the file-required early bail — they refine
     // `session.text` rather than the uploaded file. They still need an
@@ -512,10 +567,16 @@ function App() {
 
     const action = isRefine ? null : MAGIC_ACTIONS.find(a => a.id === actionId);
     const endpoint = action?.endpoint || '/api/extract';
-    const prompt = customPromptOverride
+    const basePrompt = customPromptOverride
       ?? (isRefine
         ? `${refineAction.prompt}\n\nINPUT:\n${activeSession.text}`
         : action?.prompt ?? '');
+    // Track K — language override only wraps text-bearing magic-action prompts.
+    // SVG / image-extract endpoints have null prompts and an override would be
+    // a no-op anyway. Refine actions are language-agnostic so we skip them too.
+    const prompt = (!isRefine && languageOverride && languageOverride !== 'auto' && basePrompt)
+      ? LANGUAGE_OVERRIDE_PROMPT(basePrompt, languageOverride)
+      : basePrompt;
 
     let sessionId = activeSessionId;
     if (!sessionId && !isRefine) sessionId = createNewSession(file.name);
@@ -573,6 +634,13 @@ function App() {
         }
       } else {
         updates = { kind: actionId };
+        // Track K — record the active language override on the session so a
+        // reload picks the same chip state. `auto` clears the override.
+        if (languageOverride === 'auto') {
+          updates.languageOverride = null;
+        } else if (languageOverride) {
+          updates.languageOverride = languageOverride;
+        }
         if (data.svg) {
           updates.svg = data.svg;
           updates.text = '';
@@ -799,6 +867,53 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [runAction]);
+
+  // Track K — language override re-run hook. LanguagePill (mounted by
+  // SourceColumn — Track I's owned file, not editable here) dispatches a
+  // window-level `og:language-override` CustomEvent when the user picks a
+  // language. We re-run the active session's last action with the override
+  // wrapped around the prompt. The pill records the override on the
+  // session via `runAction`'s `languageOverride` option so a reload keeps
+  // the chip in `(override)` mode.
+  //
+  // Why a custom event instead of a prop chain: SourceColumn's render of
+  // `<LanguagePill lang={detectedLang} />` doesn't forward arbitrary
+  // props, and Track K's owned-file list explicitly excludes editing
+  // SourceColumn (Track I owns it). The event hop is a one-line workaround
+  // that keeps the contract honest: when SourceColumn does forward props
+  // in a future track, LanguagePill already accepts an `onOverride` prop
+  // that takes precedence over the event.
+  useEffect(() => {
+    const onOverride = (ev) => {
+      const lang = ev?.detail?.lang;
+      if (!lang) return;
+      // Use the requested sessionId when present so a click on a pill bound
+      // to a stale session can't misroute the re-run; fall back to the
+      // currently active session.
+      const requestedId = ev?.detail?.sessionId || activeSessionId;
+      const target = sessions.find(s => s.id === requestedId);
+      if (!target) return;
+      // Determine the action to re-run: prefer the session's recorded
+      // `kind` (set after the last successful magic-action run); fall back
+      // to `text` so a fresh session with no kind still works.
+      const actionId = target.kind && MAGIC_ACTIONS.some(a => a.id === target.kind)
+        ? target.kind
+        : 'text';
+      // Move focus to the target session if needed so `runAction` operates
+      // on the right state. `runAction` reads `activeSession` for the refine
+      // path; the magic-action path reads `file`, which the user uploaded
+      // for this session.
+      if (requestedId !== activeSessionId) {
+        setActiveSessionId(requestedId);
+      }
+      // Persist the override immediately (so the chip flips to `(override)`
+      // even before the re-run lands) and fire the action with the wrap.
+      updateSession(requestedId, { languageOverride: lang === 'auto' ? null : lang });
+      runAction(actionId, undefined, { languageOverride: lang });
+    };
+    window.addEventListener('og:language-override', onOverride);
+    return () => window.removeEventListener('og:language-override', onOverride);
+  }, [activeSessionId, sessions, runAction, updateSession]);
 
   const cancelRunning = useCallback(() => {
     if (abortRef.current) {
