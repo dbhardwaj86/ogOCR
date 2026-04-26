@@ -702,6 +702,110 @@ kbd, code { font-family: var(--mono); }
   background: var(--bg-deep);
 }
 
+/* ===================================================================
+   Output hero band — PromptDock lives above the canvas, not below it,
+   so the free-form ask is the most prominent surface in the output
+   pane. Sits between og-output-head/og-output-modes and og-output-canvas.
+   =================================================================== */
+.og-output-hero {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--rule);
+}
+.og-output-hero .og-prompt {
+  padding: 14px 24px 14px;
+}
+.og-output-hero .og-prompt-input {
+  background: var(--bg);
+}
+.og-output-hero .og-prompt-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+/* ===================================================================
+   Source thumbnail strip (tablet portrait, mobilePane='output').
+   Hidden by default at every breakpoint; tablet portrait media query
+   below makes it visible when the source pane is collapsed.
+   =================================================================== */
+.og-source-thumb { display: none; }
+.og-source-thumb-toggle {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: var(--bg-deep);
+  border: 0;
+  border-bottom: 1px solid var(--rule-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.og-source-thumb-toggle:hover { color: var(--ink); }
+.og-source-thumb.is-expanded .og-source-thumb-toggle {
+  border-bottom-color: var(--rule);
+  color: var(--ink);
+}
+.og-source-thumb-glyph {
+  font-family: var(--serif);
+  font-size: 16px;
+  color: var(--accent);
+  line-height: 1;
+}
+.og-source-thumb-label {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 500;
+}
+.og-source-thumb-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-faint);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.og-source-thumb-caret {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.og-source-thumb-body {
+  padding: 12px 14px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.og-source-thumb-img {
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+}
+.og-source-thumb-pdf {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 18px;
+  text-align: center;
+}
+.og-source-thumb-pdf-glyph {
+  font-family: var(--serif);
+  font-size: 32px; line-height: 1;
+  color: var(--accent);
+}
+.og-source-thumb-pdf-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
 /* exports */
 .og-exports {
   display: flex; gap: 0;
@@ -1477,7 +1581,29 @@ kbd, code { font-family: var(--mono); }
 @media (min-width: 881px) and (max-width: 1080px) {
   .og-main { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1.1fr); }
   .og-rail { padding: 0; }
-  .og-rail > .og-rail-section:first-child { display: none; }
+  /* The first rail section (Source/upload) used to be display:none in this
+     band, leaving no visible drop target. Replace the full upload card with a
+     condensed icon-strip dropzone that still routes drop / click / camera
+     through the same UploadConfirmModal path. */
+  .og-rail > .og-rail-section:first-child {
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .og-rail > .og-rail-section:first-child .og-section-title { display: none; }
+  .og-rail > .og-rail-section:first-child .og-upload-glyph {
+    margin-bottom: 0;
+    font-size: 24px;
+  }
+  .og-rail > .og-rail-section:first-child .og-upload-title,
+  .og-rail > .og-rail-section:first-child .og-upload-sub,
+  .og-rail > .og-rail-section:first-child .og-upload-ticks,
+  .og-rail > .og-rail-section:first-child .og-upload-corners,
+  .og-rail > .og-rail-section:first-child .og-upload-camera { display: none; }
+  .og-rail > .og-rail-section:first-child .og-upload-card {
+    padding: 8px 4px;
+    min-height: 44px;
+    border-radius: var(--r-chip, 4px);
+  }
   .og-rail-grow { padding: 12px 6px; }
   .og-session { flex-direction: column; align-items: center; gap: 4px; padding: 6px 2px; }
   .og-session-body { display: none; }
@@ -1522,17 +1648,14 @@ kbd, code { font-family: var(--mono); }
 .og-kbd-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 
 /* ===================================================================
-   Upload card — camera button (mobile only) + long-press visual cue
+   Upload card — camera button (mobile only)
    =================================================================== */
 .og-upload-card {
-  /* Suppress iOS callout/contextmenu so our manual long-press handler can fire */
+  /* Stops iOS from popping the OS share/save callout when the user taps
+     and holds the dropzone — keeps the click handler clean. */
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
-}
-.og-upload-card.is-long-pressing {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .og-upload-camera { display: none; }
 .og-upload-camera-glyph {
@@ -1543,7 +1666,9 @@ kbd, code { font-family: var(--mono); }
 }
 
 /* ===================================================================
-   Upload confirm modal — long-press preview-then-confirm flow
+   Upload confirm modal — default preview-then-confirm flow.
+   Every drop / pick / camera-capture funnels through here so the user
+   gets a "Use this file" confirmation step before the session is created.
    =================================================================== */
 .og-upload-confirm-shroud {
   position: fixed; inset: 0;
@@ -1633,6 +1758,135 @@ kbd, code { font-family: var(--mono); }
   min-height: 40px;
   cursor: pointer;
 }
+
+/* ===================================================================
+   First-run welcome modal — three editorial slides + Try a sample.
+   Mounts only on first boot, gated by localStorage 'ogOCR_first_run'.
+   =================================================================== */
+.og-welcome-shroud {
+  position: fixed; inset: 0;
+  background: oklch(0.15 0.01 80 / 0.6);
+  backdrop-filter: blur(3px);
+  display: grid; place-items: center;
+  padding: 16px;
+  z-index: 9200;
+  animation: ogFade 0.18s ease;
+}
+.og-welcome-modal {
+  width: min(520px, 100%);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  box-shadow: 0 24px 48px -12px oklch(0 0 0 / 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.og-welcome-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.og-welcome-brand {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.og-welcome-skip {
+  background: transparent;
+  border: 0;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.og-welcome-skip:hover { color: var(--ink); }
+.og-welcome-body {
+  padding: 28px 28px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.og-welcome-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+}
+.og-welcome-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 500;
+  font-style: italic;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.og-welcome-text {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.og-welcome-dots {
+  display: flex; justify-content: center; gap: 6px;
+  padding: 6px 0 14px;
+}
+.og-welcome-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--rule);
+  transition: background var(--tx-fast, 0.14s);
+}
+.og-welcome-dot.is-active { background: var(--accent); }
+.og-welcome-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-deep);
+}
+.og-welcome-btn {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  min-height: 40px;
+  cursor: pointer;
+}
+.og-welcome-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.og-welcome-btn-ghost {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+}
+.og-welcome-btn-ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.og-welcome-btn-primary {
+  background: var(--ink);
+  color: var(--bg-card);
+  border: 1px solid var(--ink);
+  font-weight: 500;
+}
+.og-welcome-btn-primary:hover:not(:disabled) {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+@media (max-width: 880px) {
+  .og-welcome-modal { width: 100%; }
+  .og-welcome-actions { flex-wrap: wrap; }
+  .og-welcome-btn { flex: 1 1 auto; }
+}
+
 
 /* ===================================================================
    Phone + landscape phone + portrait tablet (≤880px):
@@ -1727,15 +1981,22 @@ kbd, code { font-family: var(--mono); }
   .og-rendered .og-h1 { font-size: 26px; }
   .og-rendered .og-h2 { font-size: 18px; }
 
-  /* Foot: capped at ~30 dvh; never grows, never shrinks; scrolls internally */
+  /* Foot: ExportBar only now that PromptDock has been hoisted into the hero
+     band above the canvas. Smaller cap because the dock no longer lives here. */
   .og-output-foot {
     flex: 0 0 auto;
-    max-height: clamp(120px, 30dvh, 220px);
+    max-height: clamp(72px, 22dvh, 160px);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--rule);
     background: var(--bg-deep);
+  }
+
+  /* Hero PromptDock on phone: tighter padding + single-row layout. */
+  .og-output-hero { flex: 0 0 auto; }
+  .og-output-hero .og-prompt {
+    padding: 10px 12px;
   }
 
   /* ExportBar: horizontal chip strip with internal scroll */
@@ -1827,6 +2088,15 @@ kbd, code { font-family: var(--mono); }
   .og-palette-input { font-size: 18px; }
   .og-modal-head { flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
   .og-modal-actions { flex-wrap: wrap; }
+}
+
+/* Tablet portrait (641-880 px): show a collapsible source thumbnail strip
+   inside the output pane so the user keeps a peek at what's being read while
+   the source pane is collapsed by data-mobile-pane="output". Phone widths
+   keep the strip hidden — at <641 px the user can swap panes via the tab
+   bar instead. */
+@media (min-width: 641px) and (max-width: 880px) {
+  .og-main[data-mobile-pane="output"] .og-source-thumb { display: block; }
 }
 
 /* ===================================================================
@@ -2115,7 +2385,8 @@ kbd, code { font-family: var(--mono); }
 
   /* Hide chrome regardless of mode */
   .og-topbar, .og-rail, .og-source, .og-output-head, .og-output-modes,
-  .og-output-foot, .og-proc, .og-toast, .og-palette-shroud,
+  .og-output-foot, .og-output-hero, .og-source-thumb,
+  .og-proc, .og-toast, .og-palette-shroud, .og-welcome-shroud,
   .og-inline-error, .og-skip-link, .og-mock-badge, .og-diagnostics,
   .print-hide, .og-modal-head,
   .og-compile-palette, .og-compile-inspector {

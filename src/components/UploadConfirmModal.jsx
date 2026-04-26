@@ -85,8 +85,9 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
             className="og-btn-primary"
             onClick={() => onConfirm(file)}
             disabled={!isImage && !isPdf}
+            autoFocus
           >
-            Use this {isPdf ? 'PDF' : 'image'}
+            Use this {isPdf ? 'PDF' : isImage ? 'image' : 'file'}
           </button>
         </div>
       </div>

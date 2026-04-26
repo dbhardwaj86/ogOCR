@@ -6,6 +6,7 @@ import OutputColumn from './components/OutputColumn';
 import MobileTabs from './components/MobileTabs';
 import CommandPalette from './components/CommandPalette';
 import UploadConfirmModal from './components/UploadConfirmModal';
+import WelcomeModal from './components/WelcomeModal';
 import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
@@ -73,6 +74,11 @@ const initialCompiles = (() => {
 const initialActiveCompileId = (() => {
   try { return localStorage.getItem(ACTIVE_COMPILE_KEY) || null; } catch { return null; }
 })();
+// First-run gate for the welcome modal. Once dismissed (or sample-loaded) we
+// stamp localStorage so it never re-opens on this browser.
+const initialFirstRun = (() => {
+  try { return localStorage.getItem('ogOCR_first_run') !== '1'; } catch { return false; }
+})();
 
 function pickInitialMobilePane(sessions, activeId) {
   const active = sessions.find(s => s.id === activeId);
@@ -99,6 +105,12 @@ function App() {
     if (!initialActiveCompileId) return null;
     return initialCompiles.some(c => c.id === initialActiveCompileId) ? initialActiveCompileId : null;
   });
+  const [firstRun, setFirstRun] = useState(initialFirstRun);
+
+  const dismissWelcome = useCallback(() => {
+    setFirstRun(false);
+    try { localStorage.setItem('ogOCR_first_run', '1'); } catch { /* ignore */ }
+  }, []);
 
   const abortRef = useRef(null);
   const progressRef = useRef(null);
@@ -525,6 +537,7 @@ function App() {
         <ErrorBoundary>
           <OutputColumn
             session={activeSession}
+            file={file}
             processing={processing}
             prompt={customPrompt}
             setPrompt={setCustomPrompt}
@@ -580,6 +593,13 @@ function App() {
             </ErrorBoundary>
           </div>
         </div>
+      )}
+
+      {firstRun && (
+        <WelcomeModal
+          onClose={dismissWelcome}
+          onTrySample={(sampleFile) => setPendingPreviewFile(sampleFile)}
+        />
       )}
 
       <Toast entry={toast} onDismiss={dismissToast} />
