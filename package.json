@@ -27,6 +27,7 @@
     "hpp": "^0.2.3",
     "idb-keyval": "^6.2.2",
     "katex": "^0.16.45",
+    "mermaid": "^11.14.0",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.6",
     "pdfjs-dist": "^5.6.205",

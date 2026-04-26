@@ -1,3 +1,12 @@
+// Sprint 2.8b — every text-bearing extract prompt asks Gemini to append a
+// detected-language metadata line as the LAST line of its response. The
+// frontend strips that line before render and surfaces the code via the
+// LanguagePill in the source-column header. "und" means undetectable; the
+// pill renders "Unknown" rather than hiding so the user knows we tried.
+const DETECTED_LANG_DIRECTIVE =
+  ' Always end your response with a single line: "__detected_lang: <ISO 639-1 code>"' +
+  ' (e.g., "__detected_lang: en"). Use "und" if you cannot detect.';
+
 // The 8 magic actions. Each row's `id`, `prompt`, and `endpoint` are the
 // wire-compat contract with the existing server endpoints — do not rename
 // or change those values without coordinating with server/index.js.
@@ -7,28 +16,28 @@ export const MAGIC_ACTIONS = [
     hint: 'Plain prose, paragraphs preserved',
     glyph: 'T', key: 'T',
     endpoint: '/api/extract',
-    prompt: 'Extract all text from this image accurately. Maintain paragraphs. Return strictly markdown.',
+    prompt: 'Extract all text from this image accurately. Maintain paragraphs. Return strictly markdown.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'handwriting', group: 'Text', label: 'Clean Handwriting',
     hint: 'Transcribe + fix obvious errors',
     glyph: 'H', key: 'H',
     endpoint: '/api/extract',
-    prompt: 'This is a handwritten note. Transcribe it perfectly, fixing any obvious spelling errors, and format it nicely in markdown.',
+    prompt: 'This is a handwritten note. Transcribe it perfectly, fixing any obvious spelling errors, and format it nicely in markdown.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'table', group: 'Structure', label: 'Format as Table',
     hint: 'Tabular data → markdown table',
     glyph: '▦', key: 'B',
     endpoint: '/api/extract',
-    prompt: 'Extract the data from this image and format it perfectly as a markdown table.',
+    prompt: 'Extract the data from this image and format it perfectly as a markdown table.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'actions', group: 'Structure', label: 'Extract Actions',
     hint: 'Pull tasks into a checklist',
     glyph: '✓', key: 'A',
     endpoint: '/api/extract',
-    prompt: 'Read this document and extract a list of actionable items or tasks. Format them as a markdown checklist.',
+    prompt: 'Read this document and extract a list of actionable items or tasks. Format them as a markdown checklist.' + DETECTED_LANG_DIRECTIVE,
   },
   {
     id: 'math', group: 'Symbol', label: 'Math to LaTeX',
@@ -139,4 +148,25 @@ export function relTime(d) {
   if (sec < 3600) return Math.round(sec / 60) + 'm ago';
   if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
   return Math.round(sec / 86400) + 'd ago';
+}
+
+// Sprint 2.8b — language detection helpers. The extract prompt now instructs
+// Gemini to append `__detected_lang: <code>` as the final line of its
+// response. `parseDetectedLang` returns the trailing code (or null);
+// `stripDetectedLang` removes the metadata line so the user only sees the
+// content. The regex is anchored to the end of the string so an inline
+// occurrence inside the body cannot fool either helper. If the model emits
+// the directive multiple times (it shouldn't, but Gemini occasionally
+// duplicates instructions), only the last trailing line wins.
+const DETECTED_LANG_TRAILING_RE = /\n__detected_lang:\s*([a-z]{2,3})\s*$/;
+
+export function parseDetectedLang(text) {
+  if (typeof text !== 'string') return null;
+  const m = text.match(DETECTED_LANG_TRAILING_RE);
+  return m ? m[1] : null;
+}
+
+export function stripDetectedLang(text) {
+  if (typeof text !== 'string') return text;
+  return text.replace(DETECTED_LANG_TRAILING_RE, '');
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import RenderedDoc from './RenderedDoc';
+import RenderedDoc, { detectMermaidBlock } from './RenderedDoc';
 import SourceDoc from './SourceDoc';
 import ProcessingStrip from './ProcessingStrip';
 import ExportBar from './ExportBar';
@@ -57,7 +57,7 @@ function OutputColumn({
   onRetry,
   onDismissError,
 }) {
-  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine'
+  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -100,9 +100,21 @@ function OutputColumn({
     : [];
   const hasRefinements = populatedRefineKinds.length > 0;
 
+  // Sprint 2.8a — Diagram pill is conditional: shown when the session is
+  // explicitly mermaid-kind, or when the extracted text contains a fenced
+  // ```mermaid block. Both conditions are checked because (a) free-form
+  // prompts can return mermaid without setting kind, and (b) the mermaid
+  // action sets kind but the text still wraps the code in a fence.
+  const hasMermaid =
+    session?.kind === 'mermaid' || !!detectMermaidBlock(session?.text);
+
   // If the user picked the Refine pill but the session no longer has any
   // populated refinements (e.g. switched sessions), fall back to Preview.
-  const effectiveMode = mode === 'refine' && !hasRefinements ? 'rendered' : mode;
+  // Same idea for Diagram: if the active session no longer has a mermaid
+  // block, drop back to Preview rather than rendering an empty editor.
+  let effectiveMode = mode;
+  if (effectiveMode === 'refine' && !hasRefinements) effectiveMode = 'rendered';
+  if (effectiveMode === 'diagram' && !hasMermaid) effectiveMode = 'rendered';
 
   return (
     <section className="og-output">
@@ -137,6 +149,13 @@ function OutputColumn({
               onClick={() => setMode('refine')}
               title="View AI-refined versions of this document"
             >Refine</button>
+          )}
+          {hasMermaid && (
+            <button
+              className={'og-pill og-pill-diagram' + (effectiveMode === 'diagram' ? ' is-active' : '')}
+              onClick={() => setMode('diagram')}
+              title="Open the Mermaid live editor for this diagram"
+            >Diagram</button>
           )}
           <button
             className="og-pill og-pill-secondary"
@@ -221,6 +240,9 @@ function OutputColumn({
         )}
         {effectiveMode === 'refine' && (
           <RefinementTabs refinements={refinements} populatedKinds={populatedRefineKinds} />
+        )}
+        {effectiveMode === 'diagram' && (
+          <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} mode="diagram" />
         )}
       </div>
 
