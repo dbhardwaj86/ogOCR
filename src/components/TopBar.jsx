@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import CornerBracket from './CornerBracket';
+import MockBadge from './MockBadge';
+import { NEXT_THEME, THEME_LABELS } from '../theme';
 
-const THEME_LABELS = { paper: 'Paper', sepia: 'Sepia', ink: 'Ink' };
-const NEXT_THEME = { paper: 'sepia', sepia: 'ink', ink: 'paper' };
-
-function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen }) {
+function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen, onDiagnosticsOpen }) {
   const [time, setTime] = useState(() => new Date());
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 30000);
@@ -36,6 +35,7 @@ function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen }) {
             <span className="og-meta-val">{activeSession.filename}</span>
           </>
         )}
+        <MockBadge />
       </div>
       <div className="og-topbar-right">
         <button
@@ -45,6 +45,17 @@ function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen }) {
         >
           {THEME_LABELS[theme] || 'Paper'}
         </button>
+        {onDiagnosticsOpen && (
+          <button
+            type="button"
+            className="og-kbd og-kbd-btn"
+            onClick={onDiagnosticsOpen}
+            title="Open diagnostics (Shift+?)"
+            aria-label="Open diagnostics"
+          >
+            ?
+          </button>
+        )}
         <button
           type="button"
           className="og-kbd og-kbd-btn"

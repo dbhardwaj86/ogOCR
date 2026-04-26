@@ -22,13 +22,17 @@ function PlaceholderLines({ seed }) {
 }
 
 function SourcePreview({ session, file, processing, onImageDims }) {
+  // Memoize the blob URL so re-renders don't realloc, then revoke on unmount or
+  // when `file` changes. StrictMode's dev double-mount still pairs alloc with
+  // a clean revoke because the unmount cleanup fires before the second mount's
+  // memo runs.
   const imageUrl = useMemo(() => {
-    if (file?.type?.startsWith('image/')) return URL.createObjectURL(file);
-    return null;
+    if (!file?.type?.startsWith('image/')) return null;
+    return URL.createObjectURL(file);
   }, [file]);
-
   useEffect(() => {
-    return () => { if (imageUrl) URL.revokeObjectURL(imageUrl); };
+    if (!imageUrl) return undefined;
+    return () => URL.revokeObjectURL(imageUrl);
   }, [imageUrl]);
 
   const isPdf = file?.type === 'application/pdf';

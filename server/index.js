@@ -2,12 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import hpp from 'hpp';
+import rateLimit from 'express-rate-limit';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import sharp from 'sharp';
 import os from 'os';
 import { Readable } from 'node:stream';
+import { sendError, codeFromException } from './sendError.js';
 
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 
@@ -53,7 +57,72 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use(express.json());
+// 12 MiB body cap — extracted markdown for a 50-page PDF easily exceeds the
+// 100 KiB default. Hits both /api/save-drive and /api/email which round-trip
+// the whole document.
+app.use(express.json({ limit: '12mb' }));
+
+// Security headers (CSP off — the app is API-only, doesn't serve HTML).
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+// HTTP parameter pollution guard. Multipart form-data isn't parsed by hpp
+// (multer handles those), so this only affects JSON/urlencoded bodies.
+app.use(hpp());
+
+// Rate limiting: 60 req/min/IP globally; 15 req/min/IP on the OCR routes since
+// each kicks off a Gemini call. We don't trust X-Forwarded-For (no proxy in
+// front in dev) — set `trust proxy` to false so the limiter uses socket IP.
+app.set('trust proxy', false);
+const globalLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_req, res) => sendError(res, 'RATE_LIMITED'),
+  // Skip the status endpoint — frontend pings it on mount.
+  skip: (req) => req.path === '/api/_status',
+});
+const ocrLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_req, res) => sendError(res, 'OCR_QUOTA', { message: 'Too many OCR requests in a short window.' }),
+});
+app.use(globalLimiter);
+
+// Optional shared-secret gate. When OG_API_TOKEN is set, every /api/* request
+// (except /api/_status) must send X-OG-Token. Local dev keeps OG_API_TOKEN
+// unset, so this is a no-op. Useful for the LAN-binding scenario where any
+// device on the network can otherwise reach Gemini through this server.
+app.use('/api', (req, res, next) => {
+  if (req.path === '/_status') return next();
+  const expected = process.env.OG_API_TOKEN;
+  if (!expected) return next();
+  const got = req.header('x-og-token');
+  if (!got) return sendError(res, 'AUTH_REQUIRED');
+  if (got !== expected) return sendError(res, 'AUTH_INVALID');
+  return next();
+});
+
+// Per-IP semaphore over uploads. Cap concurrent in-flight uploads so a single
+// LAN client can't OOM the server with 50 parallel multer requests sitting in
+// memoryStorage. Holds up to 5 concurrent per IP; 6th onward queues briefly,
+// then 503s.
+const UPLOAD_CONCURRENCY = 5;
+const inflightByIp = new Map();
+function uploadSemaphore(req, res, next) {
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  const n = inflightByIp.get(ip) || 0;
+  if (n >= UPLOAD_CONCURRENCY) {
+    return sendError(res, 'RATE_LIMITED', { message: 'Too many uploads in flight from this device.' });
+  }
+  inflightByIp.set(ip, n + 1);
+  res.on('close', () => {
+    const m = (inflightByIp.get(ip) || 1) - 1;
+    if (m <= 0) inflightByIp.delete(ip); else inflightByIp.set(ip, m);
+  });
+  next();
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 
@@ -88,21 +157,38 @@ function withTimeout(promise, ms = GEMINI_TIMEOUT_MS) {
 }
 
 function sendModelError(res, error, fallback) {
-  if (error?.message === TIMEOUT_MARKER) {
-    return res.status(504).json({
-      error: `Gemini took longer than ${GEMINI_TIMEOUT_MS / 1000}s. Try a smaller file or fewer pages.`,
-    });
-  }
-  return res.status(500).json({ error: fallback });
+  // Legacy helper preserved for in-flight call sites that haven't migrated to
+  // sendError yet. New code should call sendError(res, code, { cause }).
+  const code = codeFromException(error);
+  return sendError(res, code, {
+    cause: error?.stack || error?.message || error,
+    message: code === 'OCR_INTERNAL' ? fallback : undefined,
+  });
 }
+
+// Strip Unicode bidi/format chars — Drive accepts them but downstream tooling
+// can render them deceptively. Constructed via RegExp(string) so the source
+// file contains only ASCII-safe \uXXXX escapes, satisfying no-irregular-
+// whitespace and avoiding accidental copy-paste of zero-width chars.
+const BIDI_RE = new RegExp(
+  '[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]',
+  'g'
+);
 
 function sanitizeDriveFilename(name) {
   const cleaned = (typeof name === 'string' ? name : '')
     .replace(/[/\\]/g, '')
     .split('\x00').join('')
+    .replace(BIDI_RE, '')
     .trim()
     .slice(0, 255);
   return cleaned || 'ogOCR_Document.txt';
+}
+
+// Escape single quotes in a Drive query value. Today DRIVE_FOLDER_NAME is a
+// constant, but if it ever becomes user-supplied we already handle it.
+function escapeDriveQ(value) {
+  return String(value).replace(/'/g, "\\'");
 }
 
 function mimeForFilename(name) {
@@ -119,7 +205,7 @@ function getOrCreateOgFolder() {
   if (folderIdPromise) return folderIdPromise;
   folderIdPromise = (async () => {
     const list = await driveClient.files.list({
-      q: `name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      q: `name='${escapeDriveQ(DRIVE_FOLDER_NAME)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       spaces: 'drive',
       fields: 'files(id)',
       pageSize: 1,
@@ -137,17 +223,17 @@ function getOrCreateOgFolder() {
   return folderIdPromise;
 }
 
-app.post('/api/extract', upload.single('file'), async (req, res) => {
+app.post('/api/extract', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     const { prompt } = req.body;
 
-    if (!file) return res.status(400).json({ error: 'No file provided' });
+    if (!file) return sendError(res, 'CAP_NO_FILE');
     if (prompt !== undefined && typeof prompt !== 'string') {
-      return res.status(400).json({ error: 'Prompt must be a string' });
+      return sendError(res, 'OCR_BAD_PROMPT', { message: 'Prompt must be a string.' });
     }
     if (typeof prompt === 'string' && prompt.length > MAX_PROMPT_CHARS) {
-      return res.status(400).json({ error: `Prompt too long (max ${MAX_PROMPT_CHARS} chars)` });
+      return sendError(res, 'OCR_BAD_PROMPT', { message: `Prompt too long (max ${MAX_PROMPT_CHARS} chars).` });
     }
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -165,12 +251,17 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
   }
 });
 
+const EMAIL_TIMEOUT_MS = 30_000;
+
 app.post('/api/email', async (req, res) => {
   try {
-    const { email, text = '', subject } = req.body;
+    const { email, text = '', subject } = req.body || {};
 
     if (typeof email !== 'string' || !EMAIL_REGEX.test(email)) {
-      return res.status(400).json({ error: 'Invalid email address' });
+      return sendError(res, 'EXP_EMAIL_BAD_RECIPIENT');
+    }
+    if (typeof text !== 'string') {
+      return sendError(res, 'OCR_BAD_PROMPT', { message: 'Email body must be a string.' });
     }
     const safeSubject = (typeof subject === 'string' ? subject : 'ogOCR Extracted Document')
       .replace(/[\r\n]/g, ' ')
@@ -181,33 +272,42 @@ app.post('/api/email', async (req, res) => {
         host: 'smtp.gmail.com',
         port: 465,
         secure: true,
-        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
       });
-      await transporter.sendMail({
+      await withTimeout(transporter.sendMail({
         from: process.env.SMTP_USER,
         to: email,
         subject: safeSubject,
-        text
-      });
-      res.json({ success: true, message: "Email sent successfully!" });
+        text,
+      }), EMAIL_TIMEOUT_MS);
+      res.json({ success: true, message: 'Email sent successfully!', mock: false });
     } else {
       console.log(`[MOCK EMAIL] To: ${email}\nSubject: ${safeSubject}\nBody: ${text.substring(0, 100)}...`);
-      res.json({ success: true, message: "Email mock sent! Configure SMTP_USER and SMTP_PASS in .env for real emails." });
+      res.json({
+        success: true,
+        mock: true,
+        message: '(Mock) Email recorded — set SMTP_USER and SMTP_PASS in .env to send real emails.',
+      });
     }
   } catch (error) {
-    console.error("Email Error:", error);
-    res.status(500).json({ error: 'Failed to send email' });
+    console.error('Email Error:', error?.message || error);
+    sendModelError(res, error, 'Failed to send email');
   }
 });
 
 app.post('/api/save-drive', async (req, res) => {
-  const { text = '', filename } = req.body || {};
-  const safeName = sanitizeDriveFilename(filename);
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const text = typeof body.text === 'string' ? body.text : '';
+  const safeName = sanitizeDriveFilename(body.filename);
 
   if (!driveClient) {
     console.log(`[MOCK DRIVE] Saving ${safeName} to Drive...`);
     const timer = setTimeout(() => {
-      res.json({ success: true, message: `Successfully saved ${safeName} to Google Drive (Mock)!` });
+      res.json({
+        success: true,
+        mock: true,
+        message: `(Mock) Saved ${safeName}. Run \`npm run bootstrap-drive\` to enable real Drive saves.`,
+      });
     }, 1500);
     res.on('close', () => clearTimeout(timer));
     return;
@@ -219,7 +319,7 @@ app.post('/api/save-drive', async (req, res) => {
       const mimeType = mimeForFilename(safeName);
       const created = await driveClient.files.create({
         requestBody: { name: safeName, parents: [folderId] },
-        media: { mimeType, body: Readable.from(typeof text === 'string' ? text : '') },
+        media: { mimeType, body: Readable.from(text) },
         fields: 'id, webViewLink',
       });
       return created.data;
@@ -228,34 +328,40 @@ app.post('/api/save-drive', async (req, res) => {
     const data = await withTimeout(save, DRIVE_TIMEOUT_MS);
     res.json({
       success: true,
+      mock: false,
       message: `Saved ${safeName} to Drive`,
       fileId: data.id,
       webViewLink: data.webViewLink,
     });
   } catch (error) {
     const status = error?.code || error?.response?.status;
-    if (status === 401) {
-      console.error('Drive auth expired:', error?.errors || error?.message || error);
-      return res.status(401).json({ error: 'Drive auth expired — re-run scripts/bootstrap-drive.js' });
-    }
     console.error('Drive save error:', error?.errors || error?.message || error);
-    sendModelError(res, error, 'Drive save failed');
+    if (status === 401) return sendError(res, 'EXP_DRIVE_AUTH_EXPIRED');
+    if (status === 403) return sendError(res, 'EXP_DRIVE_SCOPE_MISSING');
+    if (error?.message === TIMEOUT_MARKER) return sendError(res, 'EXP_DRIVE_TIMEOUT');
+    return sendError(res, 'EXP_DRIVE_GENERIC', { cause: error?.message || error });
   }
 });
 
 app.post('/api/classroom/draft', (req, res) => {
-  const { filename = "ogOCR_Classroom_Draft" } = req.body;
+  const { filename = 'ogOCR_Classroom_Draft' } = (req.body && typeof req.body === 'object') ? req.body : {};
   console.log(`[MOCK CLASSROOM] Drafting assignment: ${filename}...`);
   const timer = setTimeout(() => {
-    res.json({ success: true, message: `Successfully drafted ${filename} to Google Classroom (Mock)!` });
+    res.json({
+      success: true,
+      mock: true,
+      message: `(Mock) Drafted ${filename} to Classroom. Real Classroom integration is on the roadmap.`,
+    });
   }, 1500);
-  req.on('close', () => clearTimeout(timer));
+  // Use res.on('close', ...) — req.on('close') fires when express.json() finishes
+  // parsing the body, which would clear the timer before the response sends.
+  res.on('close', () => clearTimeout(timer));
 });
 
-app.post('/api/sketch-to-svg', upload.single('file'), async (req, res) => {
+app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
-    if (!file) return res.status(400).json({ error: 'No file provided' });
+    if (!file) return sendError(res, 'CAP_NO_FILE');
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
     const imageParts = [{ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }];
@@ -276,12 +382,12 @@ app.post('/api/sketch-to-svg', upload.single('file'), async (req, res) => {
   }
 });
 
-app.post('/api/extract-images', upload.single('file'), async (req, res) => {
+app.post('/api/extract-images', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
-    if (!file) return res.status(400).json({ error: 'No file provided' });
+    if (!file) return sendError(res, 'CAP_NO_FILE');
     if (!ALLOWED_EXTRACT_IMAGES_MIMES.includes(file.mimetype)) {
-      return res.status(400).json({ error: 'Unsupported file type for image extraction' });
+      return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type for image extraction.' });
     }
 
     const model = genAI.getGenerativeModel({
@@ -306,12 +412,12 @@ app.post('/api/extract-images', upload.single('file'), async (req, res) => {
       raw = JSON.parse(jsonText);
     } catch {
       console.error("Failed to parse Gemini JSON. First 200 chars:", jsonText.substring(0, 200));
-      return res.status(502).json({ error: 'Model returned malformed JSON' });
+      return sendError(res, 'OCR_MALFORMED_JSON');
     }
 
     if (!Array.isArray(raw)) {
       console.error("Gemini did not return an array, got:", typeof raw);
-      return res.status(502).json({ error: 'Model did not return an array' });
+      return sendError(res, 'OCR_MALFORMED_JSON', { message: 'Model did not return an array.' });
     }
 
     const boxes = raw.filter(b =>
@@ -375,17 +481,33 @@ app.post('/api/extract-images', upload.single('file'), async (req, res) => {
   }
 });
 
+// Status: lets the client paint a "MOCK · email,classroom" pill in the top
+// bar so the user knows which I/O paths are real vs. mocked. Cheap and safe
+// to call repeatedly — read-only, derived from process.env.
+app.get('/api/_status', (_req, res) => {
+  const driveReal = DRIVE_ENV_KEYS.every(k => !!process.env[k]);
+  const emailReal = !!(process.env.SMTP_USER && process.env.SMTP_PASS);
+  res.json({
+    gemini: process.env.GEMINI_API_KEY ? 'real' : 'missing',
+    email: emailReal ? 'real' : 'mock',
+    drive: driveReal ? 'real' : 'mock',
+    classroom: 'mock',
+    auth: process.env.OG_API_TOKEN ? 'token' : 'open',
+    serverTime: Date.now(),
+  });
+});
+
 // Multer / unhandled error middleware (must be last)
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(413).json({ error: `File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB)` });
+      return sendError(res, 'CAP_FILE_TOO_LARGE', { message: `File too large (max ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB).` });
     }
-    return res.status(400).json({ error: `Upload error: ${err.code}` });
+    return sendError(res, 'CAP_NO_FILE', { message: `Upload error: ${err.code}.` });
   }
   console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+  return sendError(res, 'OCR_INTERNAL', { cause: err?.stack || err?.message || err });
 });
 
 function getLanUrls(p) {

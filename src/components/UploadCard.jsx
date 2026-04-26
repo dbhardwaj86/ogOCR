@@ -1,12 +1,13 @@
 import { useRef, useState, useEffect } from 'react';
 import CornerBracket from './CornerBracket';
+import { showError } from '../errors/showError';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_TYPE_RE = /^(image\/|application\/pdf$)/;
 const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 12;
 
-function UploadCard({ onUpload, onRequestPreview, onError }) {
+function UploadCard({ onUpload, onRequestPreview }) {
   const inputRef = useRef(null);
   const cameraRef = useRef(null);
   const pressTimerRef = useRef(null);
@@ -21,13 +22,16 @@ function UploadCard({ onUpload, onRequestPreview, onError }) {
   }, []);
 
   const validate = (f) => {
-    if (!f) return false;
-    if (!ACCEPTED_TYPE_RE.test(f.type)) {
-      onError?.('Only images and PDFs are supported.');
+    if (!f) {
+      showError('CAP_NO_FILE');
+      return false;
+    }
+    if (!ACCEPTED_TYPE_RE.test(f.type || '')) {
+      showError('CAP_BAD_MIME');
       return false;
     }
     if (f.size > MAX_BYTES) {
-      onError?.('File is too large (max 10 MiB).');
+      showError('CAP_FILE_TOO_LARGE');
       return false;
     }
     return true;
@@ -49,7 +53,12 @@ function UploadCard({ onUpload, onRequestPreview, onError }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setActive(false);
-    const f = e.dataTransfer.files?.[0];
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length > 1) {
+      showError('CAP_MULTI_FILE');
+      return;
+    }
+    const f = files[0];
     if (validate(f)) onUpload(f);
   };
 
@@ -128,8 +137,8 @@ function UploadCard({ onUpload, onRequestPreview, onError }) {
           <CornerBracket flip="xy" />
         </div>
         <div className="og-upload-glyph">＋</div>
-        <div className="og-upload-title">Drop a document</div>
-        <div className="og-upload-sub">image · pdf · screenshot</div>
+        <div className="og-upload-title">Drop a file or click to browse</div>
+        <div className="og-upload-sub">JPG · PNG · PDF · up to 10 MB</div>
         <div className="og-upload-ticks">
           {Array.from({ length: 14 }).map((_, i) => <span key={i} className="og-tick" />)}
         </div>
@@ -164,7 +173,7 @@ function UploadCard({ onUpload, onRequestPreview, onError }) {
         aria-label="Take photo with camera"
       >
         <span className="og-upload-camera-glyph">◉</span>
-        <span>Take photo</span>
+        <span>Snap a photo</span>
       </button>
     </>
   );

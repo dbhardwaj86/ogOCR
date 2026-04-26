@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+> **🔁 Resuming the active 3-sprint plan? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first.**
+>
+> That file holds the live status of the in-progress audit-implementation pass (sprints S1/S2/S3 from `~/.claude/plans/we-will-work-on-fuzzy-teacup.md`), what shipped, what's pending, and exactly where to pick up. The architecture notes below remain accurate, but anything about active work belongs in the handoff.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project

@@ -1,14 +1,19 @@
 import { useState } from 'react';
+import { showError, showInfo } from '../errors/showError';
+import { errFromResponse, errFromException } from '../errors/errFromResponse';
 
-function exportPNG(svgString, filename = 'ogOCR_Export.png') {
+function exportPNG(svgString, filename = 'ogOCR_Export.png', onError) {
   const div = document.createElement('div');
   div.innerHTML = svgString;
   const svgEl = div.querySelector('svg');
-  if (!svgEl) return false;
+  if (!svgEl) {
+    onError && onError('EXP_SVG_BROWSER_LIMIT', 'No <svg> root found in this content.');
+    return false;
+  }
 
   const vb = svgEl.viewBox?.baseVal;
-  let w = parseFloat(svgEl.getAttribute('width')) || (vb?.width) || 800;
-  let h = parseFloat(svgEl.getAttribute('height')) || (vb?.height) || 600;
+  const w = parseFloat(svgEl.getAttribute('width')) || (vb?.width) || 800;
+  const h = parseFloat(svgEl.getAttribute('height')) || (vb?.height) || 600;
   if (!svgEl.getAttribute('width')) svgEl.setAttribute('width', w);
   if (!svgEl.getAttribute('height')) svgEl.setAttribute('height', h);
 
@@ -18,20 +23,29 @@ function exportPNG(svgString, filename = 'ogOCR_Export.png') {
 
   const img = new Image();
   img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width || w;
-    canvas.height = img.height || h;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-    const a = document.createElement('a');
-    a.href = canvas.toDataURL('image/png');
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width || w;
+      canvas.height = img.height || h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = filename;
+      a.click();
+    } catch (err) {
+      // Tainted canvas, OOM, or any rasterization failure surfaces here.
+      onError && onError('EXP_SVG_BROWSER_LIMIT', err?.message);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   };
-  img.onerror = () => URL.revokeObjectURL(url);
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    onError && onError('EXP_SVG_BROWSER_LIMIT', 'Image failed to load before rasterization.');
+  };
   img.src = url;
   return true;
 }
@@ -73,6 +87,10 @@ function EmailDialog({ open, onClose, onSubmit, busy }) {
   );
 }
 
+// onShowToast was the legacy plain-string callback — kept on the prop list so
+// older callers don't need to update, but ignored: every surface here now
+// goes through the central error registry.
+// eslint-disable-next-line no-unused-vars
 function ExportBar({ session, onShowToast, processing }) {
   const [copied, setCopied] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
@@ -84,18 +102,28 @@ function ExportBar({ session, onShowToast, processing }) {
   const baseName = (session?.filename || 'ogOCR_Document').replace(/\.[^.]+$/, '');
 
   const handleCopy = async () => {
-    if (noContent) return;
+    if (noContent) {
+      showError('EXP_EMAIL_NO_CONTENT');
+      return;
+    }
+    if (!navigator.clipboard) {
+      showError('EXP_CLIPBOARD_NO_API');
+      return;
+    }
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch {
-      onShowToast('Copy failed');
+      showError('EXP_CLIPBOARD_DENIED');
     }
   };
 
   const handleDrive = async () => {
-    if (noContent) return;
+    if (noContent) {
+      showError('EXP_EMAIL_NO_CONTENT');
+      return;
+    }
     try {
       const ext = session.svg ? '.svg' : '.txt';
       const r = await fetch('/api/save-drive', {
@@ -103,25 +131,46 @@ function ExportBar({ session, onShowToast, processing }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: content, filename: baseName + ext }),
       });
+      if (!r.ok) {
+        const entry = await errFromResponse(r, 'EXP_DRIVE_GENERIC');
+        showError(entry.code, { message: entry.message, hint: entry.hint });
+        return;
+      }
       const data = await r.json();
-      onShowToast(data.message || data.error || 'Saved');
-    } catch {
-      onShowToast('Save failed');
+      if (data.mock) {
+        showError('EXP_DRIVE_MOCK');
+      } else {
+        showInfo(data.message || `Saved ${baseName + ext} to Drive.`,
+          data.webViewLink ? 'Open in Drive: ' + data.webViewLink : null);
+      }
+    } catch (err) {
+      const entry = errFromException(err, 'EXP_DRIVE_GENERIC');
+      showError(entry.code, { message: entry.message, hint: entry.hint });
     }
   };
 
   const handleClassroom = async () => {
-    if (noContent) return;
+    if (noContent) {
+      showError('EXP_EMAIL_NO_CONTENT');
+      return;
+    }
     try {
       const r = await fetch('/api/classroom/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: content, filename: baseName }),
       });
+      if (!r.ok) {
+        const entry = await errFromResponse(r, 'OCR_INTERNAL');
+        showError(entry.code, { message: entry.message, hint: entry.hint });
+        return;
+      }
       const data = await r.json();
-      onShowToast(data.message || data.error || 'Drafted');
-    } catch {
-      onShowToast('Classroom draft failed');
+      if (data.mock) showError('EXP_CLASSROOM_MOCK');
+      else showInfo(data.message || 'Drafted to Classroom.');
+    } catch (err) {
+      const entry = errFromException(err);
+      showError(entry.code, { message: entry.message, hint: entry.hint });
     }
   };
 
@@ -134,22 +183,33 @@ function ExportBar({ session, onShowToast, processing }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: to, text: content, subject: `ogOCR — ${session.filename}` }),
       });
+      if (!r.ok) {
+        const entry = await errFromResponse(r, 'EXP_EMAIL_NETWORK');
+        showError(entry.code, { message: entry.message, hint: entry.hint });
+        return;
+      }
       const data = await r.json();
-      onShowToast(data.message || data.error || 'Sent');
+      if (data.mock) showError('EXP_EMAIL_MOCK');
+      else showInfo(data.message || 'Email sent.');
       setEmailOpen(false);
-    } catch {
-      onShowToast('Email failed');
+    } catch (err) {
+      const entry = errFromException(err, 'EXP_EMAIL_NETWORK');
+      showError(entry.code, { message: entry.message, hint: entry.hint });
     } finally {
       setEmailBusy(false);
     }
   };
 
   const handleLink = async () => {
+    if (!navigator.clipboard) {
+      showError('EXP_CLIPBOARD_NO_API');
+      return;
+    }
     try {
       await navigator.clipboard.writeText(window.location.href);
-      onShowToast('Link copied');
+      showError('EXP_LINK_SELF_ONLY');
     } catch {
-      onShowToast('Copy failed');
+      showError('EXP_CLIPBOARD_DENIED');
     }
   };
 
@@ -169,7 +229,9 @@ function ExportBar({ session, onShowToast, processing }) {
 
   const handlePNG = () => {
     if (!session?.svg) return;
-    exportPNG(session.svg, baseName + '.png');
+    exportPNG(session.svg, baseName + '.png', (code, message) => {
+      showError(code, message ? { hint: message } : {});
+    });
   };
 
   const handleJSON = () => {
@@ -183,7 +245,7 @@ function ExportBar({ session, onShowToast, processing }) {
       items: [
         { id: 'drive', glyph: '△', label: 'Drive', onClick: handleDrive, disabled: noContent || processing },
         { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
-        { id: 'pdf',   glyph: '▢', label: 'PDF',   onClick: handlePDF,  disabled: noContent },
+        { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
       ],
     },
     {

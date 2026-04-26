@@ -2,14 +2,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
-
-const sanitizeSvg = (svg) => DOMPurify.sanitize(svg, {
-  USE_PROFILES: { svg: true, svgFilters: true },
-  FORBID_TAGS: ['foreignObject', 'script', 'iframe'],
-  FORBID_ATTR: ['onerror', 'onload', 'onclick'],
-});
+import { sanitizeSvg } from '../svgSanitize';
 
 /* eslint-disable no-unused-vars */
 const mdComponents = {
@@ -28,9 +22,34 @@ const mdComponents = {
 };
 /* eslint-enable no-unused-vars */
 
-function RenderedDoc({ text, svg }) {
+function ImageGrid({ images }) {
+  if (!Array.isArray(images) || images.length === 0) return null;
+  return (
+    <div className="og-image-grid">
+      {images.map((img) => (
+        <figure key={img.id} className="og-image-card">
+          {img.data ? (
+            <img className="og-image-card-img" src={img.data} alt={img.desc || `Image ${img.id}`} />
+          ) : (
+            <div className="og-image-card-placeholder" aria-hidden="true">
+              <span>▦</span>
+              <span>image preview unavailable</span>
+            </div>
+          )}
+          <figcaption className="og-image-card-caption">
+            <span className="og-image-card-id">Image {img.id}</span>
+            <span className="og-image-card-desc">{img.desc}</span>
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function RenderedDoc({ text, svg, images }) {
   const hasText = !!(text && text.trim());
   const hasSvg = !!(svg && svg.trim());
+  const hasImages = Array.isArray(images) && images.length > 0;
 
   return (
     <article className="og-rendered">
@@ -57,7 +76,9 @@ function RenderedDoc({ text, svg }) {
         </ReactMarkdown>
       )}
 
-      {!hasText && !hasSvg && (
+      {hasImages && <ImageGrid images={images} />}
+
+      {!hasText && !hasSvg && !hasImages && (
         <div className="og-rendered-empty">Nothing extracted yet — pick an action.</div>
       )}
 

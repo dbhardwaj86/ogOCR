@@ -19,7 +19,9 @@ function MagicActions({ file, processing, onRun }) {
                     className={'og-tile' + (running ? ' is-running' : '')}
                     disabled={disabled}
                     onClick={() => onRun(a.id)}
-                    title={!file ? 'Upload a document first' : a.hint}
+                    title={a.hint}
+                    aria-label={`${a.label} — ${a.hint}`}
+                    aria-keyshortcuts={`Alt+${a.key}`}
                   >
                     <span className="og-tile-glyph">{a.glyph}</span>
                     <span className="og-tile-label">{a.label}</span>

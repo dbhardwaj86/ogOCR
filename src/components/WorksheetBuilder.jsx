@@ -2,13 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
-import DOMPurify from 'dompurify';
-
-const sanitizeSvg = (svg) => DOMPurify.sanitize(svg, {
-  USE_PROFILES: { svg: true, svgFilters: true },
-  FORBID_TAGS: ['foreignObject', 'script', 'iframe'],
-  FORBID_ATTR: ['onerror', 'onload', 'onclick'],
-});
+import { sanitizeSvg } from '../svgSanitize';
 
 function WorksheetBuilder({ sessions }) {
   if (!sessions || sessions.length === 0) {

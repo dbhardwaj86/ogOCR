@@ -14,7 +14,6 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
     if (!isImage || !file) return null;
     return URL.createObjectURL(file);
   }, [file, isImage]);
-
   useEffect(() => {
     if (!previewUrl) return undefined;
     return () => URL.revokeObjectURL(previewUrl);
@@ -54,7 +53,7 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
               <span className="og-upload-confirm-pdf-glyph">▤</span>
               <span className="og-upload-confirm-pdf-name">{file.name}</span>
               <span className="og-upload-confirm-pdf-note">
-                PDF preview · rasterisation pending
+                Preview not available — Gemini will read all pages.
               </span>
             </div>
           )}
@@ -87,7 +86,7 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
             onClick={() => onConfirm(file)}
             disabled={!isImage && !isPdf}
           >
-            Import
+            Use this {isPdf ? 'PDF' : 'image'}
           </button>
         </div>
       </div>

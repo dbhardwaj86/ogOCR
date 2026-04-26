@@ -9,7 +9,7 @@ function PromptDock({ value, onChange, onRun, processing, disabled }) {
       <textarea
         className="og-prompt-input"
         rows={1}
-        placeholder={disabled ? 'Upload a document to ask Gemini.' : 'Ask Gemini anything about this document — translate, summarize, restructure…'}
+        placeholder={disabled ? 'Drop a doc, then ask anything…' : 'Ask anything — translate, summarize, restructure…'}
         value={value}
         disabled={isDisabled}
         onChange={(e) => onChange(e.target.value)}

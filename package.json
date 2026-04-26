@@ -7,8 +7,12 @@
     "dev": "concurrently --kill-others-on-fail \"vite\" \"node server/index.js\"",
     "build": "vite build",
     "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"server/**/*.js\" \"scripts/**/*.js\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
-    "bootstrap-drive": "node scripts/bootstrap-drive.js"
+    "bootstrap-drive": "node scripts/bootstrap-drive.js",
+    "list-models": "node scripts/list-models.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -17,9 +21,11 @@
     "dompurify": "^3.4.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.4.1",
     "googleapis": "^144.0.0",
+    "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
     "katex": "^0.16.45",
-    "lucide-react": "^1.11.0",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.6",
     "react": "^19.2.5",
@@ -32,6 +38,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
@@ -39,6 +47,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
-    "vite": "^8.0.10"
+    "jsdom": "^29.0.2",
+    "prettier": "^3.8.3",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
   }
 }

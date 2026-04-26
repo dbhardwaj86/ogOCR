@@ -1,0 +1,203 @@
+// Central error registry. The shape and the prefix scheme (CAP_*, OCR_*, EXP_*)
+// match REVIEW_REPORT.md §5. Code is the stable identifier; messages and hints
+// are mutable copy. The server's mirror in `server/errors.js` keeps codes in
+// sync — never reuse a code with a different meaning.
+
+const SURFACE = Object.freeze({
+  TOAST: 'toast',
+  INLINE: 'inline',
+  MODAL: 'modal',
+  OVERLAY: 'overlay',
+});
+
+const SEVERITY = Object.freeze({
+  INFO: 'info',
+  WARN: 'warn',
+  ERROR: 'error',
+  FATAL: 'fatal',
+});
+
+function entry(code, surface, severity, message, hint, log = true) {
+  return Object.freeze({ code, surface, severity, message, hint, log });
+}
+
+export const ERRORS = Object.freeze({
+  // ── Capture / upload ────────────────────────────────────────────────
+  CAP_PERM_DENIED: entry('CAP_PERM_DENIED', SURFACE.INLINE, SEVERITY.ERROR,
+    'Camera access was blocked.',
+    'Allow camera in your browser settings, then tap to retry.'),
+  CAP_NO_DEVICE: entry('CAP_NO_DEVICE', SURFACE.INLINE, SEVERITY.ERROR,
+    'No camera found on this device.',
+    'Plug in a camera, or upload a file instead.'),
+  CAP_DEVICE_BUSY: entry('CAP_DEVICE_BUSY', SURFACE.INLINE, SEVERITY.WARN,
+    'Camera is in use by another app.',
+    'Close other apps using the camera and try again.'),
+  CAP_NO_API: entry('CAP_NO_API', SURFACE.INLINE, SEVERITY.WARN,
+    "Live capture isn't supported by this browser.",
+    'Use the upload button, or open this page in Safari/Chrome.'),
+  CAP_HTTPS_REQUIRED: entry('CAP_HTTPS_REQUIRED', SURFACE.INLINE, SEVERITY.WARN,
+    'Camera needs a secure connection.',
+    'Open this page over HTTPS or visit localhost.'),
+  CAP_FILE_TOO_LARGE: entry('CAP_FILE_TOO_LARGE', SURFACE.TOAST, SEVERITY.WARN,
+    'That file is over the 10 MB limit.',
+    'Compress the image or split the PDF and try again.'),
+  CAP_BAD_MIME: entry('CAP_BAD_MIME', SURFACE.TOAST, SEVERITY.WARN,
+    "We can't read that file type yet.",
+    'Use a JPG, PNG, WEBP, or PDF.'),
+  CAP_PDF_NOT_ALLOWED: entry('CAP_PDF_NOT_ALLOWED', SURFACE.INLINE, SEVERITY.INFO,
+    'Image extraction works on images only right now.',
+    'Try Extract Text on this PDF instead.', false),
+  CAP_FILE_CORRUPT: entry('CAP_FILE_CORRUPT', SURFACE.MODAL, SEVERITY.ERROR,
+    "We couldn't read that file.",
+    'It may be corrupted — try saving a fresh copy.'),
+  CAP_MULTI_FILE: entry('CAP_MULTI_FILE', SURFACE.TOAST, SEVERITY.INFO,
+    'Drop one file at a time.',
+    'Multi-file is coming soon. Pick the most important one.', false),
+  CAP_OFFLINE: entry('CAP_OFFLINE', SURFACE.INLINE, SEVERITY.WARN,
+    "You're offline.",
+    'Reconnect and tap Retry — your file is still here.'),
+  CAP_ABORTED: entry('CAP_ABORTED', SURFACE.TOAST, SEVERITY.INFO,
+    'Upload cancelled.',
+    'Tap a file again when you\'re ready.', false),
+  CAP_NO_FILE: entry('CAP_NO_FILE', SURFACE.TOAST, SEVERITY.ERROR,
+    'Something went wrong sending the file.',
+    'Try the upload again.'),
+
+  // ── Processing (OCR / Gemini) ───────────────────────────────────────
+  OCR_NO_KEY: entry('OCR_NO_KEY', SURFACE.MODAL, SEVERITY.FATAL,
+    "Server isn't configured for OCR yet.",
+    'Add GEMINI_API_KEY to .env and restart `npm run dev`.'),
+  OCR_BAD_KEY: entry('OCR_BAD_KEY', SURFACE.MODAL, SEVERITY.ERROR,
+    "Server's OCR key isn't accepted.",
+    'Check the key in .env — it may have been rotated.'),
+  OCR_QUOTA: entry('OCR_QUOTA', SURFACE.TOAST, SEVERITY.WARN,
+    'OCR is busy right now.',
+    'Wait a minute and tap Retry.'),
+  OCR_DAILY_LIMIT: entry('OCR_DAILY_LIMIT', SURFACE.MODAL, SEVERITY.WARN,
+    'Daily OCR limit reached.',
+    'Resets at midnight UTC, or upgrade the API plan.'),
+  OCR_TIMEOUT: entry('OCR_TIMEOUT', SURFACE.TOAST, SEVERITY.WARN,
+    'OCR is taking too long on this one.',
+    'Try a smaller file, or fewer PDF pages at a time.'),
+  OCR_EMPTY: entry('OCR_EMPTY', SURFACE.INLINE, SEVERITY.WARN,
+    "We didn't see anything we could read.",
+    'The image may be blank or too dark — try better lighting.'),
+  OCR_LOW_RES: entry('OCR_LOW_RES', SURFACE.INLINE, SEVERITY.WARN,
+    'This image is too small to read reliably.',
+    'Re-scan at higher resolution.'),
+  OCR_SAFETY_BLOCK: entry('OCR_SAFETY_BLOCK', SURFACE.TOAST, SEVERITY.WARN,
+    "We can't process this content.",
+    'If this looks wrong, try cropping to just the text area.'),
+  OCR_MALFORMED_JSON: entry('OCR_MALFORMED_JSON', SURFACE.TOAST, SEVERITY.WARN,
+    "OCR returned something we can't read.",
+    'Tap Retry — it usually works on the second attempt.'),
+  OCR_PDF_TOO_LONG: entry('OCR_PDF_TOO_LONG', SURFACE.MODAL, SEVERITY.WARN,
+    "This PDF has more pages than we can compile at once.",
+    'Split it into chunks of 50 pages or fewer.'),
+  OCR_NO_NETWORK: entry('OCR_NO_NETWORK', SURFACE.TOAST, SEVERITY.WARN,
+    "Can't reach the server.",
+    'Check your connection — your work is saved locally.'),
+  OCR_INTERNAL: entry('OCR_INTERNAL', SURFACE.TOAST, SEVERITY.ERROR,
+    'Something broke on our end.',
+    'Tap Retry. If it keeps happening, open the diagnostics panel.'),
+  OCR_BUSY: entry('OCR_BUSY', SURFACE.TOAST, SEVERITY.INFO,
+    'Still finishing previous action…',
+    'Wait a beat and try again.', false),
+  OCR_ABORTED: entry('OCR_ABORTED', SURFACE.OVERLAY, SEVERITY.INFO,
+    'Previous extraction stopped.',
+    null),
+  OCR_BAD_FILE: entry('OCR_BAD_FILE', SURFACE.TOAST, SEVERITY.WARN,
+    'Upload a file before running an action.',
+    'Drop or pick a file in the Library rail.', false),
+
+  // ── Export ──────────────────────────────────────────────────────────
+  EXP_EMAIL_SMTP_AUTH: entry('EXP_EMAIL_SMTP_AUTH', SURFACE.MODAL, SEVERITY.ERROR,
+    'Email server rejected our credentials.',
+    'Update SMTP_USER / SMTP_PASS in .env.'),
+  EXP_EMAIL_NETWORK: entry('EXP_EMAIL_NETWORK', SURFACE.INLINE, SEVERITY.WARN,
+    "Couldn't reach the email server.",
+    'Check the network and try again.'),
+  EXP_EMAIL_BAD_RECIPIENT: entry('EXP_EMAIL_BAD_RECIPIENT', SURFACE.INLINE, SEVERITY.WARN,
+    'That email address looks off.',
+    'Double-check the spelling — needs an @ and a domain.', false),
+  EXP_EMAIL_NO_CONTENT: entry('EXP_EMAIL_NO_CONTENT', SURFACE.TOAST, SEVERITY.INFO,
+    "There's nothing to send yet.",
+    'Run an action on a file first.', false),
+  EXP_EMAIL_MOCK: entry('EXP_EMAIL_MOCK', SURFACE.TOAST, SEVERITY.INFO,
+    'Email is in mock mode.',
+    'Set SMTP_USER and SMTP_PASS in .env to send real emails.', false),
+  EXP_DRIVE_AUTH_EXPIRED: entry('EXP_DRIVE_AUTH_EXPIRED', SURFACE.MODAL, SEVERITY.ERROR,
+    'Drive needs to be reconnected.',
+    'Run `npm run bootstrap-drive` and try again.'),
+  EXP_DRIVE_SCOPE_MISSING: entry('EXP_DRIVE_SCOPE_MISSING', SURFACE.MODAL, SEVERITY.ERROR,
+    "Drive doesn't have permission to save here.",
+    'Re-bootstrap Drive — the scope changed.'),
+  EXP_DRIVE_QUOTA: entry('EXP_DRIVE_QUOTA', SURFACE.TOAST, SEVERITY.WARN,
+    'Your Drive is full.',
+    'Free up space, or save locally instead.'),
+  EXP_DRIVE_TIMEOUT: entry('EXP_DRIVE_TIMEOUT', SURFACE.TOAST, SEVERITY.WARN,
+    'Drive is slow today.',
+    'Tap Retry, or save as MD and upload manually.'),
+  EXP_DRIVE_GENERIC: entry('EXP_DRIVE_GENERIC', SURFACE.TOAST, SEVERITY.ERROR,
+    "Drive save didn't go through.",
+    'Tap Retry — Drive might be having a moment.'),
+  EXP_DRIVE_MOCK: entry('EXP_DRIVE_MOCK', SURFACE.TOAST, SEVERITY.INFO,
+    'Drive is in mock mode.',
+    'Run `npm run bootstrap-drive` to enable real saves.', false),
+  EXP_PDF_FONT: entry('EXP_PDF_FONT', SURFACE.TOAST, SEVERITY.INFO,
+    'PDF generated without a font.',
+    'Switch theme to Paper for cleanest output.'),
+  EXP_PDF_TOO_LARGE: entry('EXP_PDF_TOO_LARGE', SURFACE.MODAL, SEVERITY.WARN,
+    "This PDF is too big to render in one shot.",
+    'Compile a smaller section at a time.'),
+  EXP_PDF_BLOCKED: entry('EXP_PDF_BLOCKED', SURFACE.INLINE, SEVERITY.WARN,
+    'Your browser blocked the print dialog.',
+    'Allow pop-ups for this page and try again.'),
+  EXP_SVG_PATH_LIMIT: entry('EXP_SVG_PATH_LIMIT', SURFACE.TOAST, SEVERITY.WARN,
+    'This SVG is too detailed for PNG export.',
+    'Save as SVG instead — vector keeps full quality.'),
+  EXP_SVG_BROWSER_LIMIT: entry('EXP_SVG_BROWSER_LIMIT', SURFACE.TOAST, SEVERITY.WARN,
+    "Your browser couldn't rasterize this SVG.",
+    'Save as SVG, or try a different browser.'),
+  EXP_FILENAME_INVALID: entry('EXP_FILENAME_INVALID', SURFACE.TOAST, SEVERITY.INFO,
+    'Filename had only invalid characters.',
+    'Renamed to ogOCR_Document.txt — rename in Drive after.'),
+  EXP_FILENAME_COLLISION: entry('EXP_FILENAME_COLLISION', SURFACE.MODAL, SEVERITY.WARN,
+    'A file with that name already exists.',
+    'Rename, or save anyway as a duplicate.'),
+  EXP_DOWNLOAD_BLOCKED: entry('EXP_DOWNLOAD_BLOCKED', SURFACE.INLINE, SEVERITY.WARN,
+    "Your browser didn't start the download.",
+    'Long-press the document and use Share → Save to Files.'),
+  EXP_CLIPBOARD_DENIED: entry('EXP_CLIPBOARD_DENIED', SURFACE.TOAST, SEVERITY.WARN,
+    'Copy was blocked by the browser.',
+    'Click into the page and try again, or select + Cmd/Ctrl-C manually.'),
+  EXP_CLIPBOARD_NO_API: entry('EXP_CLIPBOARD_NO_API', SURFACE.TOAST, SEVERITY.WARN,
+    "Copy isn't available in this browser.",
+    'Switch to Source mode and select-all manually.'),
+  EXP_CLASSROOM_MOCK: entry('EXP_CLASSROOM_MOCK', SURFACE.TOAST, SEVERITY.INFO,
+    'Classroom export is in preview.',
+    'We logged the draft locally — real Classroom save is coming soon.', false),
+  EXP_LINK_SELF_ONLY: entry('EXP_LINK_SELF_ONLY', SURFACE.TOAST, SEVERITY.INFO,
+    'Link copied — this only works on your network.',
+    'Multi-device share link is on the roadmap.', false),
+  EXP_LOAD_OK: entry('EXP_LOAD_OK', SURFACE.TOAST, SEVERITY.INFO,
+    'Loaded.', null, false),
+  EXP_OK: entry('EXP_OK', SURFACE.TOAST, SEVERITY.INFO, 'Done.', null, false),
+});
+
+export function getError(code) {
+  return ERRORS[code] || ERRORS.OCR_INTERNAL;
+}
+
+// Render a templated message: replaces $name with overrides.name.
+export function formatMessage(code, overrides = {}) {
+  const e = getError(code);
+  const msg = overrides.message || e.message;
+  const hint = overrides.hint || e.hint || null;
+  const fill = (s) => (typeof s === 'string'
+    ? s.replace(/\$([a-zA-Z_]+)/g, (_, k) => overrides[k] ?? `$${k}`)
+    : s);
+  return { code: e.code, severity: overrides.severity || e.severity, surface: overrides.surface || e.surface, message: fill(msg), hint: fill(hint), log: e.log };
+}
+
+export { SURFACE, SEVERITY };

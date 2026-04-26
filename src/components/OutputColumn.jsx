@@ -4,6 +4,7 @@ import SourceDoc from './SourceDoc';
 import ProcessingStrip from './ProcessingStrip';
 import ExportBar from './ExportBar';
 import PromptDock from './PromptDock';
+import InlineError from './InlineError';
 import { KIND_LABEL } from '../magicActions';
 
 function OutputColumn({
@@ -16,6 +17,9 @@ function OutputColumn({
   onCompile,
   onUpdateSession,
   hasFile,
+  onCancel,
+  onRetry,
+  onDismissError,
 }) {
   const [mode, setMode] = useState('rendered'); // 'rendered' | 'source'
 
@@ -33,6 +37,8 @@ function OutputColumn({
     }
   };
 
+  const lastError = session?.lastError && !processing ? session.lastError : null;
+
   return (
     <section className="og-output">
       <div className="og-output-head">
@@ -46,23 +52,33 @@ function OutputColumn({
           <button
             className={'og-pill' + (mode === 'rendered' ? ' is-active' : '')}
             onClick={() => setMode('rendered')}
-          >Rendered</button>
+          >Preview</button>
           <button
             className={'og-pill' + (mode === 'source' ? ' is-active' : '')}
             onClick={() => setMode('source')}
-          >Source</button>
+          >Markdown</button>
           <button
-            className="og-pill"
+            className="og-pill og-pill-secondary"
             onClick={onCompile}
             title="Compile all sessions into a printable worksheet"
-          >Compile</button>
+          >Worksheet</button>
         </div>
       </div>
 
-      <ProcessingStrip processing={processing} />
+      <ProcessingStrip processing={processing} onCancel={processing ? onCancel : null} />
+
+      {lastError && (
+        <InlineError
+          entry={lastError}
+          onRetry={onRetry}
+          onDismiss={onDismissError}
+        />
+      )}
 
       <div className="og-output-canvas">
-        {mode === 'rendered' && <RenderedDoc text={session?.text} svg={session?.svg} />}
+        {mode === 'rendered' && (
+          <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} />
+        )}
         {mode === 'source' && (
           <SourceDoc
             value={value}

@@ -1,7 +1,7 @@
 import UploadCard from './UploadCard';
 import SessionList from './SessionList';
 
-function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSession, onUpload, onRequestPreview, onUploadError }) {
+function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSession, onUpload, onRequestPreview }) {
   return (
     <aside className="og-rail">
       <div className="og-rail-section">
@@ -9,7 +9,7 @@ function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSess
           <span className="og-section-num">01</span>
           <span>Source</span>
         </div>
-        <UploadCard onUpload={onUpload} onRequestPreview={onRequestPreview} onError={onUploadError} />
+        <UploadCard onUpload={onUpload} onRequestPreview={onRequestPreview} />
       </div>
 
       <div className="og-rail-section og-rail-grow">
