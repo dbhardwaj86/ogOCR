@@ -30,6 +30,7 @@ import {
   blobToDataURL,
   dataURLToBlob,
 } from './storage/idb';
+import { setRunner as setQueueRunner, updateProgress as updateQueueProgress } from './queue.js';
 
 // --- Initial-state loaders run once at module load (Strict Mode safe). ---
 function readJSON(key, fallback) {
@@ -648,6 +649,126 @@ function App() {
       if (abortRef.current?.signal === signal) abortRef.current = null;
     }
   }, [file, processing, activeSessionId, activeSession, createNewSession, updateSession, startProgress, finishProgress]);
+
+  // Queue runner: a multi-file drop enqueues into `src/queue.js`; the queue
+  // calls back into here to run each file through the action endpoint. We
+  // intentionally don't reuse `runAction` directly because the queue runner
+  // operates on its own file (not the App-level `file` state) and creates a
+  // fresh session for every item — `runAction` is wired to the active
+  // session and would clobber state across queue runs.
+  useEffect(() => {
+    setQueueRunner(async (item, signal) => {
+      const queuedFile = item.file;
+      const actionId = item.actionId || 'text';
+      const action = MAGIC_ACTIONS.find(a => a.id === actionId);
+      const endpoint = action?.endpoint || '/api/extract';
+      const prompt = action?.prompt || '';
+
+      // Each queued file gets its own session — that's the whole point of
+      // batching. We don't touch `file` / `activeSessionId` here so a
+      // user-initiated single-file run can keep going in parallel with the
+      // queue (the per-session progress strip in OutputColumn is owned by
+      // runAction; the QueueRail owns its own progress display).
+      const sessionId = createNewSession(queuedFile.name);
+
+      // Lightweight client-side progress tween: the queue UI shows per-row
+      // progress, and we don't have backend-streamed progress. Tween from
+      // 0 → 0.95 over the request and snap to 1 on response.
+      let pct = 0;
+      const tickHandle = { id: null };
+      const tick = () => {
+        if (signal.aborted) return;
+        pct = Math.min(0.95, pct + Math.random() * 0.06 + 0.03);
+        updateQueueProgress(item.id, pct);
+        if (pct < 0.95) {
+          tickHandle.id = setTimeout(tick, 220 + Math.random() * 180);
+        }
+      };
+      tickHandle.id = setTimeout(tick, 200);
+      const stopTick = () => {
+        if (tickHandle.id != null) clearTimeout(tickHandle.id);
+        tickHandle.id = null;
+      };
+
+      try {
+        const formData = new FormData();
+        // Use the new `files` field name; server still accepts `file` for
+        // backward-compat but the multi-route is `files[]`.
+        formData.append('files', queuedFile);
+        if (prompt) formData.append('prompt', prompt);
+
+        const r = await fetch(endpoint, { method: 'POST', body: formData, signal });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const entry = await errFromResponse(r);
+          const e = new Error(entry.message);
+          e.__registryEntry = entry;
+          throw e;
+        }
+
+        const updates = { kind: actionId };
+        let hadResponse = false;
+        if (data.svg) {
+          updates.svg = data.svg;
+          updates.text = '';
+          hadResponse = true;
+        } else if (Array.isArray(data.images)) {
+          updates.images = data.images;
+          updates.svg = '';
+          // Mirror runAction's IDB persistence — fire-and-forget.
+          (async () => {
+            for (const img of data.images) {
+              if (!img?.id || typeof img?.data !== 'string') continue;
+              try {
+                const blob = await dataURLToBlob(img.data);
+                if (blob) await idbSetImage(img.id, blob);
+              } catch (e) {
+                if (e?.code === 'IDB_QUOTA') {
+                  showError('IDB_QUOTA');
+                  break;
+                }
+                console.warn('IDB store failed for image', img.id, e);
+              }
+            }
+          })();
+          updates.text = data.images.length === 0
+            ? '_No visual components found in this document._'
+            : (data.message || `Found ${data.images.length} visual components.`);
+          hadResponse = true;
+        } else if (typeof data.text === 'string') {
+          updates.text = data.text;
+          updates.svg = '';
+          hadResponse = true;
+        }
+
+        if (!hadResponse) {
+          const entry = formatMessage('OCR_EMPTY');
+          const e = new Error(entry.message);
+          e.__registryEntry = entry;
+          throw e;
+        }
+
+        updates.lastError = null;
+        updateSession(sessionId, updates);
+        updateQueueProgress(item.id, 1);
+        return sessionId;
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          const entry = err.__registryEntry || errFromException(err);
+          updateSession(sessionId, {
+            lastError: { code: entry.code, message: entry.message, hint: entry.hint, at: Date.now(), actionId },
+          });
+          // Surface in toast — user otherwise has no signal a queue item failed.
+          showError(entry.code, { message: entry.message, hint: entry.hint });
+        }
+        throw err;
+      } finally {
+        stopTick();
+      }
+    });
+    // The runner closes over `createNewSession` / `updateSession`; both are
+    // stable callbacks (useCallback) so this effect runs at mount only.
+  }, [createNewSession, updateSession]);
 
   // Cmd/Ctrl + K → palette toggle. Shift+? → diagnostics. Esc closes overlays.
   // ⌥ + letter → run a magic action. We re-bind when `runAction` changes so we

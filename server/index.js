@@ -124,7 +124,25 @@ function uploadSemaphore(req, res, next) {
   next();
 }
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
+// Sprint 2.4: clients may POST up to 20 files in a single request as a queue
+// batch. The queue runs serially client-side (one in flight at a time) — the
+// server still handles only the first file in the batch per response, so the
+// per-request memory footprint matches the single-file path. Aggregate cap is
+// 20 * MAX_UPLOAD_BYTES = 200 MiB.
+const MAX_BATCH_FILES = 20;
+const uploadArray = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_BATCH_FILES },
+});
+
+// Helper: pull the canonical upload from a request that accepts either
+// `files[]` (new multi route) or `file` (legacy single field, in case a
+// client still sends that shape).
+function pickUploadedFile(req) {
+  if (Array.isArray(req.files) && req.files.length > 0) return req.files[0];
+  if (req.file) return req.file;
+  return null;
+}
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -279,9 +297,9 @@ async function resolveDriveFolder(segments) {
   return parentId;
 }
 
-app.post('/api/extract', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
+app.post('/api/extract', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
   try {
-    const file = req.file;
+    const file = pickUploadedFile(req);
     const { prompt } = req.body;
 
     if (!file) return sendError(res, 'CAP_NO_FILE');
@@ -431,9 +449,9 @@ app.post('/api/classroom/draft', (req, res) => {
   res.on('close', () => clearTimeout(timer));
 });
 
-app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
+app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
   try {
-    const file = req.file;
+    const file = pickUploadedFile(req);
     if (!file) return sendError(res, 'CAP_NO_FILE');
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
@@ -455,9 +473,9 @@ app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, upload.single('file'
   }
 });
 
-app.post('/api/extract-images', ocrLimiter, uploadSemaphore, upload.single('file'), async (req, res) => {
+app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.array('files', MAX_BATCH_FILES), async (req, res) => {
   try {
-    const file = req.file;
+    const file = pickUploadedFile(req);
     if (!file) return sendError(res, 'CAP_NO_FILE');
     if (!ALLOWED_EXTRACT_IMAGES_MIMES.includes(file.mimetype)) {
       return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type for image extraction.' });
