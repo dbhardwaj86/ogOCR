@@ -198,6 +198,18 @@ export const ERRORS = Object.freeze({
   EXP_LOAD_OK: entry('EXP_LOAD_OK', SURFACE.TOAST, SEVERITY.INFO,
     'Loaded.', null, false),
   EXP_OK: entry('EXP_OK', SURFACE.TOAST, SEVERITY.INFO, 'Done.', null, false),
+  EXP_DOCX_NO_BINARY: entry('EXP_DOCX_NO_BINARY', SURFACE.TOAST, SEVERITY.INFO,
+    'Word export is in mock mode.',
+    'Install pandoc on the server to enable real Word export.'),
+  EXP_DOCX_TIMEOUT: entry('EXP_DOCX_TIMEOUT', SURFACE.TOAST, SEVERITY.ERROR,
+    'Word export is taking too long.',
+    'Try a smaller compile or fewer pages.'),
+  EXP_DOCX_PANDOC_FAIL: entry('EXP_DOCX_PANDOC_FAIL', SURFACE.TOAST, SEVERITY.ERROR,
+    'Word export failed.',
+    'Check the server log for the pandoc error.'),
+  EXP_DOCX_TOO_LARGE: entry('EXP_DOCX_TOO_LARGE', SURFACE.TOAST, SEVERITY.WARN,
+    'This compile is too large for Word export.',
+    'Split the content into smaller compiles.'),
 
   // ── IndexedDB image storage ─────────────────────────────────────────
   IDB_QUOTA: entry('IDB_QUOTA', SURFACE.MODAL, SEVERITY.ERROR,

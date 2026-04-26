@@ -17,6 +17,10 @@ import {
 import CompilePalette from './CompilePalette';
 import CompileBlockCard from './CompileBlockCard';
 import { showError, showInfo } from '../errors/showError';
+import { exportDocx } from '../exportDocx';
+
+// REMOVE_AT_MERGE Track J stub — Track K provides real hydrateCompileImages
+const hydrateCompileImages = (c) => c;
 
 function downloadBlob(content, filename, type) {
   const blob = new Blob([content], { type });
@@ -142,6 +146,21 @@ function CompileBuilder({
     }
   }, [activeCompile, sessions]);
 
+  const handleSaveDocx = useCallback(async () => {
+    if (!activeCompile) return;
+    try {
+      const hydrated = hydrateCompileImages(activeCompile);
+      const md = compileToMarkdown(hydrated, sessions);
+      await exportDocx({
+        markdown: md,
+        filename: safeFilename(activeCompile.name) + '.docx',
+      });
+    } catch (err) {
+      console.error('compile DOCX save failed', err);
+      showError('EXP_GENERIC', { message: 'Could not start Word export.', hint: 'Check the diagnostics panel.' });
+    }
+  }, [activeCompile, sessions]);
+
   const handlePrint = useCallback(() => {
     if (!activeCompile || activeCompile.blocks.length === 0) {
       showError('EXP_GENERIC', { message: 'Nothing to print yet.', hint: 'Add at least one block from the palette.' });
@@ -191,6 +210,9 @@ function CompileBuilder({
                 </button>
                 <button type="button" className="og-export-btn" onClick={handleSaveHtml} disabled={blocks.length === 0}>
                   <span>Save .html</span>
+                </button>
+                <button type="button" className="og-export-btn" onClick={handleSaveDocx} disabled={blocks.length === 0}>
+                  <span>Save .docx</span>
                 </button>
                 <button type="button" className="og-export-btn" onClick={handlePrint} disabled={blocks.length === 0}>
                   <span>Print {String.fromCharCode(8594)} PDF</span>

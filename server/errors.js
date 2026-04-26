@@ -27,6 +27,11 @@ export const ERRORS = Object.freeze({
   EXP_DRIVE_TIMEOUT: { http: 504, message: 'Drive is slow today.', hint: 'Retry, or save as MD.' },
   EXP_DRIVE_GENERIC: { http: 502, message: "Drive save didn't go through.", hint: 'Retry — Drive might be having a moment.' },
 
+  EXP_DOCX_NO_BINARY: { http: 503, message: 'Word export is in mock mode.', hint: 'Install pandoc on the server to enable real Word export.' },
+  EXP_DOCX_TIMEOUT: { http: 504, message: 'Word export is taking too long.', hint: 'Try a smaller compile or fewer pages.' },
+  EXP_DOCX_PANDOC_FAIL: { http: 502, message: 'Word export failed.', hint: 'Check the server log for the pandoc error.' },
+  EXP_DOCX_TOO_LARGE: { http: 413, message: 'This compile is too large for Word export.', hint: 'Split the content into smaller compiles.' },
+
   AUTH_REQUIRED: { http: 401, message: 'API token required.', hint: 'Send X-OG-Token header (set OG_API_TOKEN in .env).' },
   AUTH_INVALID: { http: 403, message: 'API token invalid.', hint: 'Check X-OG-Token header against .env.' },
   RATE_LIMITED: { http: 429, message: 'Too many requests.', hint: 'Slow down and try again.' },
