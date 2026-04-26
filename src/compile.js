@@ -37,6 +37,7 @@ export const BLOCK_KINDS = Object.freeze({
   IMAGE: 'image',
   PAGE_BREAK: 'pageBreak',
   SESSION: 'session',
+  EQUATION: 'equation',
 });
 
 const PAGE_SIZES = ['a4', 'letter'];
@@ -283,6 +284,12 @@ function blockToMarkdown(block, sessions) {
     }
     case BLOCK_KINDS.PAGE_BREAK:
       return '\n\n<div style="page-break-after: always"></div>\n\n';
+    case BLOCK_KINDS.EQUATION: {
+      const body = (block.text || '').trim();
+      if (!body) return '';
+      if (body.startsWith('$$') && body.endsWith('$$')) return body;
+      return `$$\n${body}\n$$`;
+    }
     case BLOCK_KINDS.SESSION: {
       const s = resolveSessionBlock(block, sessions);
       if (!s) return '';

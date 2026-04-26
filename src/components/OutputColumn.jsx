@@ -57,7 +57,7 @@ function OutputColumn({
   onRetry,
   onDismissError,
 }) {
-  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram'
+  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -108,13 +108,20 @@ function OutputColumn({
   const hasMermaid =
     session?.kind === 'mermaid' || !!detectMermaidBlock(session?.text);
 
+  // Sprint 3.1 — Equation pill is conditional: visible only when the
+  // session was produced by the `Math to LaTeX` action. We do not sniff the
+  // text for `$$` fences because the Math action returns raw LaTeX (no
+  // markdown wrapping), so `kind === 'math'` is the canonical signal.
+  const hasEquation = session?.kind === 'math';
+
   // If the user picked the Refine pill but the session no longer has any
   // populated refinements (e.g. switched sessions), fall back to Preview.
-  // Same idea for Diagram: if the active session no longer has a mermaid
-  // block, drop back to Preview rather than rendering an empty editor.
+  // Same idea for Diagram / Equation: if the active session no longer
+  // qualifies, drop back to Preview rather than rendering an empty editor.
   let effectiveMode = mode;
   if (effectiveMode === 'refine' && !hasRefinements) effectiveMode = 'rendered';
   if (effectiveMode === 'diagram' && !hasMermaid) effectiveMode = 'rendered';
+  if (effectiveMode === 'equation' && !hasEquation) effectiveMode = 'rendered';
 
   return (
     <section className="og-output">
@@ -156,6 +163,13 @@ function OutputColumn({
               onClick={() => setMode('diagram')}
               title="Open the Mermaid live editor for this diagram"
             >Diagram</button>
+          )}
+          {hasEquation && (
+            <button
+              className={'og-pill og-pill-equation' + (effectiveMode === 'equation' ? ' is-active' : '')}
+              onClick={() => setMode('equation')}
+              title="Open the live LaTeX editor for this equation"
+            >Equation</button>
           )}
           <button
             className="og-pill og-pill-secondary"
@@ -243,6 +257,15 @@ function OutputColumn({
         )}
         {effectiveMode === 'diagram' && (
           <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} mode="diagram" />
+        )}
+        {effectiveMode === 'equation' && (
+          <RenderedDoc
+            text={session?.text}
+            svg={session?.svg}
+            images={session?.images}
+            mode="equation"
+            onChangeText={(next) => onUpdateSession && onUpdateSession({ text: next })}
+          />
         )}
       </div>
 
