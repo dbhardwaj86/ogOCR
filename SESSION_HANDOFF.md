@@ -21,7 +21,7 @@ This is the live status of the 3-sprint implementation pass landing the [REVIEW_
 | Sprint | Status | Notes |
 |---|---|---|
 | **S1 — Stabilize & Observe** | ✅ **Complete** | Lint clean, tests passing 10/10, dev server boots, error envelope verified end-to-end via curl |
-| **S2 — Compose** | 🟡 **In progress (~30%)** | S2.1 ✅ · S2.2 ✅ · 3 parallel tracks A/C/D dispatching next (see below) |
+| **S2 — Compose** | 🟡 **In progress (~55%)** | S2.1 ✅ · S2.2 ✅ · Tracks A/C/D landed (UX cleanup, wire stubs, AI refine). 44/44 tests pass. |
 | **S3 — Differentiate** | ☐ Not started | High-leverage features compounding on the compile block model |
 
 ---
@@ -182,19 +182,29 @@ src/index.css                        (compile builder layout + print rule extens
 
 ---
 
-## Next steps (resume here)
+## Tracks A / C / D — shipped
 
-### Immediate: dispatch 3 parallel agent tracks (REVIEW_REPORT findings A, C, D)
+Plan file: `C:\Users\abc\.claude\plans\status-check-did-you-sparkling-biscuit.md`. Three parallel agents in isolated git worktrees off baseline `73dbd6a`; merged in order **A → D → C**. One trivial conflict on `OutputColumn.jsx` (mode-state declaration) resolved by hand; rest auto-merged.
 
-Plan file: `C:\Users\abc\.claude\plans\status-check-did-you-sparkling-biscuit.md`. Each track lists owned/forbidden files; reconciliation order is **A → D → C** (PromptDock hoist comes first, refine pill stacks on it, deep-link/rename slot in last).
-
-| Track | Branch | Closes | Owns |
+| Track | Commit | Merge | Closes |
 |---|---|---|---|
-| **A — UX cleanup** | `track-a-ux-cleanup` | §1.3 #5/#6/#7, §1.4 (881–1080 band, tablet portrait), §1.5 (Drive/Classroom/Email busy), §S2.9 (welcome modal) | `UploadCard.jsx`, `UploadConfirmModal.jsx`, `OutputColumn.jsx` (PromptDock hoist), `index.css` (responsive band), new `WelcomeModal.jsx` |
-| **C — Wire stubs** | `track-c-wire-stubs` | §3.3 (link, SourceTablets, Classroom mock), §S2.6 (filename rename, Drive folder UX) | `ExportBar.jsx`, `OutputColumn.jsx` (rename input), `App.jsx` (deep-link boot), `server/index.js` (folderPath), `src/errors/codes.js` |
-| **D — Refine row** | `track-d-refine` | §4.7 (AI Summary/Bullets/Formal/Casual via existing `/api/extract`) | `magicActions.js`, `MagicActions.jsx`, `App.jsx` (runAction extension), `OutputColumn.jsx` (4th pill), new test file |
+| **A — UX cleanup** | `f1c79dc` | `01ad117` | §1.3 #5/#6 (UploadConfirmModal default + long-press removed), §1.3 #7 (PromptDock hoisted to hero band above canvas), §1.4 (881–1080 px condensed dropzone, tablet-portrait collapsible source thumbnail strip), §S2.9 (`WelcomeModal.jsx` first-run, gated by `localStorage.ogOCR_first_run`, with inline base64 sample PNG) |
+| **D — Refine row** | `17e9a70` | `645de21` | §4.7 (Summary / Bullets / Formal / Casual). New `REFINE_ACTIONS` in `magicActions.js`, refine row under `MagicActions.jsx`, new `RefinementTabs.jsx` rendered behind a 4th `Refine` pill (hidden until at least one refinement is populated), `runAction` refine branch posts a synthetic `text/plain` File so `/api/extract`'s multer validator passes without server changes. Schema bumped to v3 (no-op migration). |
+| **C — Wire stubs** | `b3efd8a` | `b8b7db2` | §3.3 (Share→Link now `?session=<id>` deep-link via new `src/deepLink.js`; param resolved at module load and stripped via `replaceState`), §3.3 (`SourceTablets.jsx` deleted + `showTablets` prop chain removed), §3.3 (Classroom mock now returns parallel `info: {code: EXP_CLASSROOM_MOCK,…}` envelope so registry styling renders), §S2.6 (inline `RenameInput` next to file pill bound to `session.exportName`; export targets fall back to `filename` when blank), §S2.6 (`/api/save-drive` accepts optional `folderPath: 'a/b/c'` with auto-create + recursive `getOrCreateChildFolder`, capped at 8 segments; client gets folder-path input + recent-folders dropdown via new `localStorage.ogOCR_drive_recent`), §1.5 (inline busy state on Email/Drive/Classroom buttons replacing toast-only feedback). |
 
-Each agent runs in an isolated git worktree off the `ogOCR/` repo. Audit B (bugs) is **not** in scope here — Sprint 1 already covered it.
+**Verification (post-merge):** `npm run lint` clean · `npm test` **44/44** (was 21 baseline; +14 deep-link, +9 refine) · `npm run build` clean (728 KB main bundle, no new warnings).
+
+**Browser smoke:** still pending — Windows orphan-node-process gate (CLAUDE.md gotcha): `taskkill //F //IM node.exe` then `npm run dev`. Manual smoke list (run all five):
+
+1. Drop a file → confirm modal opens by default → run text extract → see hero PromptDock above canvas.
+2. Click Refine → Summary → 4th `Refine` pill appears with a populated `Summary` tab.
+3. Rename file in pill → Save .md uses the new name. Save .html, JSON, Email, Drive, Print all should pick it up.
+4. Open compile builder → add session block → Save .md → file downloads.
+5. Click Share → Link → paste in fresh tab → that session activates and the URL strips back to clean.
+
+**Out-of-scope deferral noted by Track C agent:** Live end-to-end Gemini call for the synthetic-file workaround in Track D (`text/plain` masquerading as a multer field). Static analysis suggests it's fine; if Gemini rejects in production the fallback is a one-line MIME swap to `image/png`.
+
+**Worktrees + branches:** the three worktrees (`ogOCR-track-a`, `ogOCR-track-c`, `ogOCR-track-d`) and their branches will be cleaned up after browser smoke confirms parity. Until then they stay as a rollback path.
 
 ### Then S2.3: Compile export pipeline
 
