@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { showError, showInfo } from '../errors/showError';
 import { errFromResponse, errFromException } from '../errors/errFromResponse';
 
 const DRIVE_RECENT_KEY = 'ogOCR_drive_recent';
 const DRIVE_RECENT_MAX = 5;
+const DRIVE_RECENT_PERSIST = 10;
 
 function readRecentFolders() {
   try {
@@ -20,7 +21,17 @@ function readRecentFolders() {
 function rememberRecentFolder(path) {
   if (!path || !path.trim()) return;
   try {
-    const next = [path, ...readRecentFolders().filter(p => p !== path)].slice(0, DRIVE_RECENT_MAX);
+    const existing = (() => {
+      try {
+        const raw = localStorage.getItem(DRIVE_RECENT_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter(p => typeof p === 'string' && p.trim()) : [];
+      } catch {
+        return [];
+      }
+    })();
+    const next = [path, ...existing.filter(p => p !== path)].slice(0, DRIVE_RECENT_PERSIST);
     localStorage.setItem(DRIVE_RECENT_KEY, JSON.stringify(next));
   } catch {
     /* ignore — best-effort persistence */
@@ -61,7 +72,6 @@ function exportPNG(svgString, filename = 'ogOCR_Export.png', onError) {
       a.download = filename;
       a.click();
     } catch (err) {
-      // Tainted canvas, OOM, or any rasterization failure surfaces here.
       onError && onError('EXP_SVG_BROWSER_LIMIT', err?.message);
     } finally {
       URL.revokeObjectURL(url);
@@ -114,6 +124,108 @@ function EmailDialog({ open, onClose, onSubmit, busy }) {
   );
 }
 
+// Generic dropdown menu used by the three Save/Share/Export groups.
+// Renders a button + popover list. Keyboard-nav: Enter/Space opens, ↓/↑
+// move between items, Enter activates, Escape closes. Outside-click closes.
+// Inner list — lives only while the menu is open. Mounting fresh resets
+// activeIdx to 0 implicitly, so we never call setState from an effect.
+function MenuList({ items, label, idPrefix, onClose, returnFocusTo }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  const handleItemKey = (e, idx, item) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIdx((idx + 1) % items.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIdx((idx - 1 + items.length) % items.length);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+      returnFocusTo?.current?.focus();
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!item.disabled) {
+        item.onClick();
+        onClose();
+      }
+    } else if (e.key === 'Tab') {
+      onClose();
+    }
+  };
+
+  return (
+    <ul className="og-export-menu-list" role="menu" aria-label={label + ' menu'}>
+      {items.map((it, idx) => (
+        <li key={it.id} role="none">
+          <button
+            type="button"
+            role="menuitem"
+            id={`${idPrefix}-${it.id}`}
+            className="og-export-menu-item"
+            disabled={it.disabled}
+            tabIndex={idx === activeIdx ? 0 : -1}
+            ref={el => { if (el && idx === activeIdx) el.focus(); }}
+            onClick={() => { if (!it.disabled) { it.onClick(); onClose(); } }}
+            onKeyDown={(e) => handleItemKey(e, idx, it)}
+          >
+            <span className="og-export-glyph">{it.glyph}</span>
+            <span>{it.label}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MenuDropdown({ label, items, openMenu, onOpen, onClose, idPrefix }) {
+  const isOpen = openMenu === label;
+  const containerRef = useRef(null);
+  const buttonRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onDoc = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [isOpen, onClose]);
+
+  const handleButtonKey = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onOpen(label);
+    }
+  };
+
+  return (
+    <div className="og-export-menu" ref={containerRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="og-export-menu-btn"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        onClick={() => (isOpen ? onClose() : onOpen(label))}
+        onKeyDown={handleButtonKey}
+      >
+        <span>{label}</span>
+        <span className="og-export-menu-caret" aria-hidden="true">▾</span>
+      </button>
+      {isOpen && (
+        <MenuList
+          items={items}
+          label={label}
+          idPrefix={idPrefix}
+          onClose={onClose}
+          returnFocusTo={buttonRef}
+        />
+      )}
+    </div>
+  );
+}
+
 // onShowToast was the legacy plain-string callback — kept on the prop list so
 // older callers don't need to update, but ignored: every surface here now
 // goes through the central error registry.
@@ -126,13 +238,16 @@ function ExportBar({ session, onShowToast, processing }) {
   const [classroomBusy, setClassroomBusy] = useState(false);
   const [folderPath, setFolderPath] = useState('');
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
+  const [folderActiveIdx, setFolderActiveIdx] = useState(-1);
   const [recentFolders, setRecentFolders] = useState(() => readRecentFolders());
+  const [openMenu, setOpenMenu] = useState(null);
+  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const folderMenuRef = useRef(null);
+  const folderInputRef = useRef(null);
 
   const noContent = !session || (!session.text && !session.svg);
   const noSvg = !session?.svg;
   const content = session?.svg || session?.text || '';
-  // exportName overrides filename for outbound exports; falls back to filename.
   const rawBase = (session?.exportName?.trim() || session?.filename || 'ogOCR_Document');
   const baseName = rawBase.replace(/\.[^.]+$/, '');
 
@@ -142,6 +257,7 @@ function ExportBar({ session, onShowToast, processing }) {
     const onDoc = (e) => {
       if (folderMenuRef.current && !folderMenuRef.current.contains(e.target)) {
         setFolderMenuOpen(false);
+        setFolderActiveIdx(-1);
       }
     };
     document.addEventListener('mousedown', onDoc);
@@ -166,7 +282,7 @@ function ExportBar({ session, onShowToast, processing }) {
     }
   };
 
-  const handleDrive = async () => {
+  const handleDrive = useCallback(async () => {
     if (noContent) {
       showError('EXP_EMAIL_NO_CONTENT');
       return;
@@ -204,7 +320,7 @@ function ExportBar({ session, onShowToast, processing }) {
     } finally {
       setDriveBusy(false);
     }
-  };
+  }, [noContent, session, folderPath, content, baseName]);
 
   const handleClassroom = async () => {
     if (noContent) {
@@ -224,9 +340,6 @@ function ExportBar({ session, onShowToast, processing }) {
         return;
       }
       const data = await r.json();
-      // Mock disclosure: server emits `info` envelope with EXP_CLASSROOM_MOCK
-      // alongside `success: true` so the UI still proceeds — but routes through
-      // the registry so the toast picks up the info-severity styling.
       if (data.info && typeof data.info.code === 'string') {
         showError(data.info.code, {
           message: data.info.message,
@@ -277,7 +390,6 @@ function ExportBar({ session, onShowToast, processing }) {
       return;
     }
     if (!session?.id) {
-      // No session yet — fall back to the legacy "this URL only" path.
       try {
         await navigator.clipboard.writeText(window.location.href);
         showError('EXP_LINK_SELF_ONLY');
@@ -321,6 +433,65 @@ function ExportBar({ session, onShowToast, processing }) {
     downloadBlob(JSON.stringify(session, null, 2), baseName + '.json', 'application/json');
   };
 
+  // navigator.share fallback. Tries native share, falls back to opening the
+  // 3-menu sheet. AbortError is silent (user cancelled the share dialog).
+  const handleNativeShare = async () => {
+    if (!navigator.share) {
+      setMobileSheetOpen(true);
+      return;
+    }
+    try {
+      await navigator.share({
+        title: session?.filename || 'ogOCR document',
+        text: content || '',
+      });
+    } catch (err) {
+      if (err && err.name !== 'AbortError') {
+        showError('EXP_SHARE_API_UNAVAILABLE');
+        setMobileSheetOpen(true);
+      }
+    }
+  };
+
+  const handleFolderKey = (e) => {
+    if (!folderMenuOpen || recentFolders.length === 0) {
+      if (e.key === 'ArrowDown' && recentFolders.length > 0) {
+        e.preventDefault();
+        setFolderMenuOpen(true);
+        setFolderActiveIdx(0);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        setFolderMenuOpen(false);
+        handleDrive();
+      } else if (e.key === 'Escape') {
+        setFolderMenuOpen(false);
+        setFolderActiveIdx(-1);
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFolderActiveIdx(idx => (idx + 1) % recentFolders.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFolderActiveIdx(idx => (idx - 1 + recentFolders.length) % recentFolders.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (folderActiveIdx >= 0 && folderActiveIdx < recentFolders.length) {
+        setFolderPath(recentFolders[folderActiveIdx]);
+        setFolderMenuOpen(false);
+        setFolderActiveIdx(-1);
+      } else {
+        setFolderMenuOpen(false);
+        handleDrive();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setFolderMenuOpen(false);
+      setFolderActiveIdx(-1);
+    }
+  };
+
   const driveLabel = driveBusy ? 'Working…' : 'Drive';
   const driveGlyph = driveBusy ? <span className="og-proc-spin">◐</span> : '△';
   const emailLabel = emailBusy ? 'Working…' : 'Email';
@@ -328,105 +499,154 @@ function ExportBar({ session, onShowToast, processing }) {
   const classroomLabel = classroomBusy ? 'Working…' : 'Classroom';
   const classroomGlyph = classroomBusy ? <span className="og-proc-spin">◐</span> : '◯';
 
-  const groups = [
-    {
-      label: 'Save',
-      items: [
-        {
-          id: 'drive',
-          glyph: driveGlyph,
-          label: driveLabel,
-          onClick: handleDrive,
-          disabled: noContent || processing || driveBusy,
-        },
-        { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
-        { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
-      ],
-    },
-    {
-      label: 'Share',
-      items: [
-        {
-          id: 'email',
-          glyph: emailGlyph,
-          label: emailLabel,
-          onClick: () => setEmailOpen(true),
-          disabled: noContent || processing || emailBusy,
-        },
-        {
-          id: 'classroom',
-          glyph: classroomGlyph,
-          label: classroomLabel,
-          onClick: handleClassroom,
-          disabled: noContent || processing || classroomBusy,
-        },
-        { id: 'link',      glyph: '∞', label: 'Link',      onClick: handleLink,               disabled: false },
-      ],
-    },
-    {
-      label: 'Export',
-      items: [
-        { id: 'copy', glyph: copied ? '✓' : '❐', label: copied ? 'Copied' : 'Copy', onClick: handleCopy, disabled: noContent },
-        { id: 'png',  glyph: '▦', label: 'PNG',  onClick: handlePNG, disabled: noSvg },
-        { id: 'json', glyph: '{}',label: 'JSON', onClick: handleJSON, disabled: !session },
-      ],
-    },
+  const saveItems = [
+    { id: 'drive', glyph: driveGlyph, label: driveLabel, onClick: handleDrive,
+      disabled: noContent || processing || driveBusy },
+    { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
+    { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
   ];
+  const shareItems = [
+    { id: 'email',     glyph: emailGlyph, label: emailLabel, onClick: () => setEmailOpen(true),
+      disabled: noContent || processing || emailBusy },
+    { id: 'classroom', glyph: classroomGlyph, label: classroomLabel, onClick: handleClassroom,
+      disabled: noContent || processing || classroomBusy },
+    { id: 'link',      glyph: '∞', label: 'Link', onClick: handleLink, disabled: false },
+  ];
+  const exportItems = [
+    { id: 'copy', glyph: copied ? '✓' : '❐', label: copied ? 'Copied' : 'Copy',
+      onClick: handleCopy, disabled: noContent },
+    { id: 'png',  glyph: '▦', label: 'PNG',  onClick: handlePNG, disabled: noSvg },
+    { id: 'json', glyph: '{}',label: 'JSON', onClick: handleJSON, disabled: !session },
+  ];
+
+  const groups = [
+    { label: 'Save',   items: saveItems },
+    { label: 'Share',  items: shareItems },
+    { label: 'Export', items: exportItems },
+  ];
+
+  const onMenuOpen = (label) => setOpenMenu(label);
+  const onMenuClose = () => setOpenMenu(null);
 
   return (
     <>
-      <div className="og-exports">
+      <div className="og-exports" data-testid="og-exports">
         {groups.map(g => (
           <div className="og-export-group" key={g.label}>
-            <div className="og-export-label">{g.label}</div>
-            <div className="og-export-items">
-              {g.items.map(it => (
-                <button
-                  key={it.id}
-                  className="og-export-btn"
-                  disabled={it.disabled}
-                  onClick={it.onClick}
-                  title={it.label}
-                >
-                  <span className="og-export-glyph">{it.glyph}</span>
-                  <span>{it.label}</span>
-                </button>
-              ))}
-              {g.label === 'Save' && (
-                <div className="og-drive-folder" ref={folderMenuRef}>
-                  <input
-                    className="og-drive-folder-input"
-                    type="text"
-                    placeholder="Drive folder (optional)"
-                    aria-label="Drive folder path (optional)"
-                    value={folderPath}
-                    onChange={(e) => setFolderPath(e.target.value)}
-                    onFocus={() => setFolderMenuOpen(recentFolders.length > 0)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.preventDefault(); setFolderMenuOpen(false); handleDrive(); }
-                      if (e.key === 'Escape') setFolderMenuOpen(false);
-                    }}
-                    disabled={driveBusy}
-                  />
-                  {folderMenuOpen && recentFolders.length > 0 && (
-                    <ul className="og-drive-folder-menu" role="listbox">
-                      {recentFolders.map(p => (
-                        <li key={p}>
-                          <button
-                            type="button"
-                            className="og-drive-folder-item"
-                            onClick={() => { setFolderPath(p); setFolderMenuOpen(false); }}
-                          >{p}</button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
+            <MenuDropdown
+              label={g.label}
+              items={g.items}
+              openMenu={openMenu}
+              onOpen={onMenuOpen}
+              onClose={onMenuClose}
+              idPrefix={'og-export-' + g.label.toLowerCase()}
+            />
+            {g.label === 'Save' && (
+              <div className="og-drive-folder" ref={folderMenuRef}>
+                <input
+                  ref={folderInputRef}
+                  className="og-drive-folder-input"
+                  type="text"
+                  placeholder="Drive folder (optional)"
+                  aria-label="Drive folder path (optional)"
+                  aria-autocomplete="list"
+                  aria-expanded={folderMenuOpen && recentFolders.length > 0}
+                  aria-controls="og-drive-folder-menu"
+                  aria-activedescendant={folderActiveIdx >= 0 ? `og-drive-folder-item-${folderActiveIdx}` : undefined}
+                  value={folderPath}
+                  onChange={(e) => { setFolderPath(e.target.value); setFolderActiveIdx(-1); }}
+                  onFocus={() => setFolderMenuOpen(recentFolders.length > 0)}
+                  onKeyDown={handleFolderKey}
+                  disabled={driveBusy}
+                />
+                {folderMenuOpen && recentFolders.length > 0 && (
+                  <ul
+                    id="og-drive-folder-menu"
+                    className="og-drive-folder-menu"
+                    role="listbox"
+                    aria-label="Recent Drive folders"
+                  >
+                    {recentFolders.map((p, idx) => (
+                      <li key={p} role="presentation">
+                        <button
+                          type="button"
+                          id={`og-drive-folder-item-${idx}`}
+                          role="option"
+                          aria-selected={idx === folderActiveIdx}
+                          className={'og-drive-folder-item' + (idx === folderActiveIdx ? ' is-active' : '')}
+                          onMouseEnter={() => setFolderActiveIdx(idx)}
+                          onClick={() => {
+                            setFolderPath(p);
+                            setFolderMenuOpen(false);
+                            setFolderActiveIdx(-1);
+                          }}
+                        >{p}</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
+
+      {/* Mobile FAB — visible only at ≤880 px via CSS. Tap to native-share, falls
+          back to a bottom sheet that re-uses the 3-menu groups above. */}
+      <button
+        type="button"
+        className="og-share-fab"
+        aria-label="Share document"
+        data-testid="og-share-fab"
+        onClick={handleNativeShare}
+        disabled={noContent}
+      >
+        <span aria-hidden="true">↗</span>
+      </button>
+
+      {mobileSheetOpen && (
+        <div
+          className="og-share-sheet-shroud"
+          onClick={() => setMobileSheetOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Share options"
+        >
+          <div className="og-share-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="og-share-sheet-grip" aria-hidden="true" />
+            {groups.map(g => (
+              <section className="og-share-sheet-group" key={g.label}>
+                <div className="og-share-sheet-label">{g.label}</div>
+                <div className="og-share-sheet-items">
+                  {g.items.map(it => (
+                    <button
+                      key={it.id}
+                      type="button"
+                      className="og-export-btn"
+                      disabled={it.disabled}
+                      onClick={() => {
+                        if (!it.disabled) {
+                          it.onClick();
+                          setMobileSheetOpen(false);
+                        }
+                      }}
+                    >
+                      <span className="og-export-glyph">{it.glyph}</span>
+                      <span>{it.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+            <button
+              type="button"
+              className="og-share-sheet-close"
+              onClick={() => setMobileSheetOpen(false)}
+            >Close</button>
+          </div>
+        </div>
+      )}
+
       <EmailDialog
         open={emailOpen}
         onClose={() => setEmailOpen(false)}
