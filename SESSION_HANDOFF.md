@@ -1,6 +1,6 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-26
+**Last updated:** 2026-04-27
 **Plan file:** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 
@@ -22,7 +22,7 @@ This is the live status of the 3-sprint implementation pass landing the [REVIEW_
 |---|---|---|
 | **S1 — Stabilize & Observe** | ✅ **Complete** | Lint clean, tests passing 10/10, dev server boots, error envelope verified end-to-end via curl |
 | **S2 — Compose** | ✅ **Complete** | All sub-phases shipped. Tracks A/C/D + E/F/G/H/I merged. 74/74 tests pass; `npm run build` clean (main bundle 494 KB, down from 728 KB pre-sprint due to lazy-loaded chunks). Browser smoke pending. |
-| **S3 — Differentiate** | ☐ Not started | High-leverage features compounding on the compile block model |
+| **S3 — Differentiate** | 🟡 **In progress** | Tracks J–N shipped 2026-04-27 (Pandoc Word export + IDB compile leak fix + LanguagePill override + LaTeX preview + Table editor + Signature capture). 109/109 tests pass; build clean (535 KB main); API smoke clean (mock path verified). Browser smoke for 6 UI scenarios pending. |
 
 ---
 
@@ -239,6 +239,50 @@ Plan file: `C:\Users\abc\.claude\plans\analyze-code-base-thoroughly-virtual-thun
 - LanguagePill **override re-run** (Track I deferred MVP — needs App.jsx hook)
 - Live LaTeX preview, table → spreadsheet block, voice annotation, page-to-section auto-grouping, signature capture, pen/stylus markup, per-token confidence heatmap, real PDF export (puppeteer)
 - Phase 13 design migration sub-phases 13.3–13.9
+
+---
+
+## Tracks J / K / L / M / N — shipped (S3 start sprint)
+
+Plan file: `C:\Users\abc\.claude\plans\brainstrom-how-to-execute-tidy-tome.md`. Five parallel agents in isolated git worktrees, all branched off baseline `12edc59`. Merged in order **K → L → M → J → N**. Two trivial conflicts hand-resolved (`RenderedDoc.jsx` between L and M; `ExportBar.jsx` between J and N). One post-merge cleanup committed for Track J's stub removal + MockBadge filter update.
+
+| Track | Commit | Merge | Closes |
+|---|---|---|---|
+| **K — Data-URL leak fix + LanguagePill override** | `31affdd` | `475806b` | Compile `block.src` data-URL leak (S2 carryover from Track E review): `COMPILE_SCHEMA_VERSION` bumped to **2**; `migrateCompileImagesToIDB` offloads `data:` URIs in compile image blocks to IndexedDB via `cimg_*` keys (separate keyspace from session images); `block.src` becomes `idb:cimg_<id>` ref. New exports `hydrateCompileImages` (async, JSON-serializable resolver for export paths) + `resolveCompileImageObjectUrls` (async, object-URL resolver for in-memory render). `compileToMarkdown`/`compileToHtml` log warning + emit `[Image not loaded]` fallback if any `idb:` ref slips through unhydrated. App.jsx wires async post-mount migration mirror of Track E's session-image flow. **LanguagePill override re-run** (S2 carryover from Track I MVP): pill now renders a click-to-open dropdown of 7 languages; selection dispatches a `og:language-override` window CustomEvent → App.jsx listener re-runs `runAction(actionId, undefined, { languageOverride: lang })`; the wrapped prompt is composed via new `LANGUAGE_OVERRIDE_PROMPT(basePrompt, lang)` helper in `magicActions.js` (prepends `"Treat the document as written in <name>…"`, appends `__detected_lang:` directive). Override-active state propagated via a module-level signal store (`publishLanguageOverrides`) consumed via `useSyncExternalStore` (couldn't thread props through SourceColumn — out of scope for K). +11 tests. |
+| **L — Live LaTeX preview block** | `102b9d8` | `730e19c` | Sprint 3 §3.1: new `EquationBlock.jsx` split-pane (textarea ↔ KaTeX live preview, reuses already-bundled `react-markdown` + `remark-math` + `rehype-katex` stack with `throwOnError: false`). New `Equation` pill in `OutputColumn.jsx` pill bank, visible only when `session.kind === 'math'` (sibling to `Preview/Markdown/Worksheet/Refine/Diagram`). `RenderedDoc.jsx` widened with optional `onChangeText` prop and a top-level `if (mode === 'equation')` early return that bypasses the markdown render path. `compile.js` gets `BLOCK_KINDS.EQUATION = 'equation'` + `case BLOCK_KINDS.EQUATION:` in `compileToMarkdown` that wraps body in `$$ … $$` (idempotent — already-wrapped passes through). +6 tests. **Note:** no CSS shipped (`src/index.css` was K-N's territory, not L's; the new `og-equation-*` class names render functional but unstyled — the layout falls back to default block flow). Carryover: small CSS pass to mirror existing `og-mermaid-editor` rules. |
+| **M — Editable table block** | `e1825e6` | `4efacc5` | Sprint 3 §3.2: new `TableBlock.jsx` with `contentEditable` cells (no extra dep), toolbar (`Sort A→Z` / `Sort Z→A` / `Add row` / `Add col` / `Export CSV` / `Export XLSX`). Inline `<style>` block (CSS sandboxed in component because `src/index.css` was out of scope, mirroring Track F's `QueueRail.jsx` precedent). `RenderedDoc.jsx` swaps the first `<table>` rendered by `react-markdown` for `<TableBlock>` via a `buildMdComponents(tableData)` factory (subsequent tables fall back to default styled `<table>`). `papaparse@^5.5.3` added to deps (~25 KB to main bundle); `xlsx@^0.18.5` added but **lazy-loaded** via dynamic `import('xlsx')` only when the user clicks `Export XLSX` — verified as a 425 KB separate chunk in build output. +8 tests. **Note:** `xlsx` package surfaces 1 high + 5 moderate npm-audit vulnerabilities (community-edition CVEs); attack surface limited to user-initiated XLSX export of their own documents. Carryover: evaluate `exceljs` or SheetJS pro CDN if the security exposure expands. **Note:** `TableBlock` accepts `onChange` but `RenderedDoc.jsx` doesn't yet pass one — edits live in component-local state until App.jsx is wired (out of scope for M). |
+| **J — Word export via Pandoc** | `ed56ff5` | `8f15ce8` (+ `7eb9a7d` post-merge cleanup) | NEW-W: new `POST /api/export-docx` Express route. Boot probe `pandoc --version` runs once at startup and caches `PANDOC_AVAILABLE`; `[pandoc] not installed — DOCX export will mock` (or `[pandoc] available pandoc <version>`) is logged. `GET /api/_status` extended with `docx: 'real' \| 'mock'`. Mock path returns 503 `{ error: { code: 'EXP_DOCX_NO_BINARY', message, hint } }` envelope. Real path: `child_process.spawn(pandocPath, [tempIn, '-f', 'markdown+tex_math_dollars+raw_html', '-t', 'docx', '-o', tempOut], { shell: false })` — temp files in `os.tmpdir()` with `crypto.randomBytes(8).toString('hex')` suffix; cleanup in `try/finally`; 30s `withTimeout` (matches Drive). Filename sanitized via `sanitizeDriveFilename` and used **only** in `Content-Disposition` (never in pandoc args). Frontend: `Save .docx` button in `CompileBuilder.jsx` header next to `Save .md`/`Save .html` (calls `await hydrateCompileImages(activeCompile)` → `compileToMarkdown(...)` → `exportDocx(...)`); `DOCX` entry in per-session `ExportBar.jsx` Save menu. New `src/exportDocx.js` client helper. New `EXP_DOCX_*` codes (4) in `src/errors/codes.js` mirrored in `server/errors.js`. +6 tests. **Post-merge cleanup commit `7eb9a7d`:** removed `REMOVE_AT_MERGE` stub (`const hydrateCompileImages = (c) => c;`) from CompileBuilder.jsx and replaced with real import from `../compile`; added `await` to the call site (K's helper is async); added `'docx'` to MockBadge filter array so the top bar pill includes it. |
+| **N — Signature capture** | `57e279c` | `82f78b6` | Sprint 3 §3.5: new `SignatureModal.jsx` full-screen modal with HTML5 canvas + Pointer Events draw surface (works for mouse / finger / Apple Pencil via `pointerType==='pen'`). Three actions: `Clear`, `Save signature`, `Insert into document`. Library row of stored signature thumbnails (cap 5; 6th save → `SIG_LIBRARY_FULL` toast). Persistence: `localStorage.ogOCR_signatures` stores `[{id, svg, createdAt}]`; `QuotaExceededError` surfaces `SIG_QUOTA`. New `Sign and save` entry in per-session `ExportBar.jsx` Save menu opens the modal; on insert the SVG is appended to the active session's text (via local `textOverride` state + direct localStorage write — App.jsx and OutputColumn.jsx were out of scope, so the source pane only updates after page reload; all ExportBar export paths see the change immediately). New `src/signatureLib.js` helper module (extracted to satisfy `react-refresh/only-export-components` lint rule). `src/index.css` adds `.og-signature-*` classes + `@media (max-width: 880px)` bottom-sheet variant. New `SIG_*` codes (2) in `src/errors/codes.js`. +4 tests. Carryover: 1-line `OutputColumn.jsx` change to forward `onUpdateSession` into `<ExportBar>` would let the source pane update live (currently waits for reload). |
+
+**Verification (post-merge final):** `npm run lint` clean · `npm test` **109/109** (was 74 baseline; +35: K +11, L +6, M +8, J +6, N +4) · `npm run build` clean — main bundle **535 KB** (+41 KB / +8.3% from 494 KB baseline; well under +30% gate). Build-warning at 500 KB chunk-size limit is informational; lazy chunks (mermaid, pdfjs, xlsx, cytoscape, katex) keep things split.
+
+**API smoke (manager-run, post-merge):**
+- `GET /api/_status` returned `{"gemini":"real","email":"mock","drive":"mock","classroom":"mock","docx":"mock","auth":"open",...}` ✓
+- `POST /api/export-docx` with `{markdown:"# Hello", filename:"test.docx"}` returned **HTTP 503** + `{"error":{"code":"EXP_DOCX_NO_BINARY","message":"Word export is in mock mode.","hint":"Install pandoc on the server to enable real Word export."}}` ✓
+- Server boot log shows `[pandoc] not installed — DOCX export will mock` ✓ (pandoc is not installed on this host; install pandoc to flip docx to real path)
+
+**Browser smoke pending (run after `taskkill //F //IM node.exe && npm run dev`):**
+
+1. **Word export — real path** (requires `pandoc` install): open compile builder → add 1 session block + 1 text block with `$\sqrt{2}$` math + 1 image block → click **Save .docx** → opens in Word with native equation editor object + embedded image. Repeat from per-session ExportBar **Save → DOCX**.
+2. **Word export — mock path** (already API-verified): open the app — top bar should show `MOCK · email,drive,classroom,docx` chip → click any Save .docx → toast `EXP_DOCX_NO_BINARY` (info severity) with hint about installing Pandoc.
+3. **Compile data-URL leak fixed:** open a compile with image blocks → reload → DevTools → Application → Local Storage → `ogOCR_compiles` value contains **no `data:image/…;base64,…` strings** (refs like `idb:cimg_…` only). Images still render in the canvas.
+4. **LanguagePill override:** extract a non-English doc → LanguagePill shows detected lang → click → dropdown opens → pick "French" → action re-runs with override prompt; new result lands; pill updates to `(override)`.
+5. **Live LaTeX preview:** run `Extract math` on a math image → `Equation` pill appears next to `Preview/Markdown/Worksheet` → click → split textarea ↔ KaTeX render; edit `\sqrt{2}` → `\sqrt{3}` → render updates live. Note: layout will be unstyled (no CSS shipped per L's report).
+6. **Table editor:** extract from a doc with a markdown table → editable grid renders; click `Sort A→Z` → rows sort; click `Add row` → blank row appended; click `Export CSV` → `.csv` downloads; click `Export XLSX` → lazy chunk loads, `.xlsx` downloads.
+7. **Signature capture:** click ExportBar **Save → Sign and save** on any session → modal opens; draw with mouse → `Save signature` (now in library); `Insert into document` → modal closes (source pane updates after page reload — see N's carryover); `Save .md` includes the SVG. Try saving 6th signature → toast `SIG_LIBRARY_FULL`. Resize to ≤880 px → modal renders as bottom sheet.
+
+**Worktrees + branches:** the five worktrees (`ogOCR-track-j` through `-n`) and their branches stay as rollback path until browser smoke confirms parity. The Track A/C/D and E–I worktrees from prior sprints are still on disk and can be cleaned up at the same time once everything is confirmed.
+
+**Carryover for next sprint (Sprint 3 follow-up):**
+
+- **Track L CSS** — ship `og-equation-*` styles in `src/index.css` mirroring `og-mermaid-editor` patterns (split-pane layout, label, textarea, preview pane). Touches `src/index.css` only.
+- **Track M `onChange`** — wire `<TableBlock>` `onChange` callback through `RenderedDoc.jsx` → `OutputColumn.jsx` → App.jsx so cell edits persist back into `session.text`. ~3 file edits.
+- **Track N source-pane visibility** — 1-line `OutputColumn.jsx` change to forward `onUpdateSession` into `<ExportBar>` so signature insert updates the source pane live (currently waits for reload).
+- **Track K LanguagePill** — when SourceColumn is next touched, thread `onOverride` and `sessionId` props through and remove the CustomEvent + signal-store fallback in LanguagePill.jsx. Also consider lifting the module-level signal store to a new `src/components/languagePillStore.js` to remove the `eslint-disable react-refresh/only-export-components` comment.
+- §3.3 Voice annotation, §3.4 Auto-grouping, §3.6 Pen/stylus markup, §3.7 Per-token confidence (blocked on Gemini logprobs), §3.8 Real PDF export via puppeteer (300 MB install gate behind `PDF_ENGINE=puppeteer`), §3.9 Final polish (CSS-only band fix, action-tile prioritization, filename auto-suggestion).
+- Phase 13.3–13.9 design migration sub-phases.
+- `xlsx` package CVEs — evaluate `exceljs` or SheetJS pro CDN swap.
+- Real Classroom OAuth integration; browser idle-connection cap fix (job-queue pattern); API key rotation.
 
 ---
 
