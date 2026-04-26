@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
 import CornerBracket from './CornerBracket';
 import { showError } from '../errors/showError';
+import { enqueue as queueEnqueue } from '../queue.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_QUEUE_FILES = 20;
 const ACCEPTED_TYPE_RE = /^(image\/|application\/pdf$)/;
 
 // Every drop / pick / camera-capture is routed through `onRequestPreview` so
@@ -46,12 +48,33 @@ function UploadCard({ onUpload, onRequestPreview }) {
     e.preventDefault();
     setActive(false);
     const files = Array.from(e.dataTransfer.files || []);
-    if (files.length > 1) {
-      showError('CAP_MULTI_FILE');
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      const f = files[0];
+      if (validate(f)) handFile(f);
       return;
     }
-    const f = files[0];
-    if (validate(f)) handFile(f);
+    // Multi-file: enqueue each valid file. Drop the >20 batch entirely with
+    // a warning rather than silently truncating — a partial enqueue would
+    // hide which files got skipped.
+    if (files.length > MAX_QUEUE_FILES) {
+      showError('QUEUE_OVERFLOW');
+      return;
+    }
+    let enqueued = 0;
+    for (const f of files) {
+      if (!validate(f)) continue;
+      queueEnqueue(f, 'text');
+      enqueued += 1;
+    }
+    if (enqueued > 0) {
+      // Surface the multi-drop affordance with the (now-updated) info copy
+      // so the user knows the queue is processing.
+      showError('CAP_MULTI_FILE', {
+        message: `Queued ${enqueued} files.`,
+        hint: 'They will run sequentially — watch the queue in the rail.',
+      });
+    }
   };
 
   const onCardClick = () => {

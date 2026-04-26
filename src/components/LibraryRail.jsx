@@ -1,5 +1,6 @@
 import UploadCard from './UploadCard';
 import SessionList from './SessionList';
+import QueueRail from './QueueRail';
 
 function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSession, onUpload, onRequestPreview }) {
   return (
@@ -11,6 +12,8 @@ function LibraryRail({ sessions, activeSessionId, setActiveSessionId, deleteSess
         </div>
         <UploadCard onUpload={onUpload} onRequestPreview={onRequestPreview} />
       </div>
+
+      <QueueRail />
 
       <div className="og-rail-section og-rail-grow">
         <div className="og-section-title">
