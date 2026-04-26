@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { showError, showInfo } from '../errors/showError';
 import { errFromResponse, errFromException } from '../errors/errFromResponse';
 import { exportDocx } from '../exportDocx';
+import SignatureModal from './SignatureModal';
 
 const DRIVE_RECENT_KEY = 'ogOCR_drive_recent';
 const DRIVE_RECENT_MAX = 5;
@@ -243,12 +244,35 @@ function ExportBar({ session, onShowToast, processing }) {
   const [recentFolders, setRecentFolders] = useState(() => readRecentFolders());
   const [openMenu, setOpenMenu] = useState(null);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [signatureOpen, setSignatureOpen] = useState(false);
+  // Local override of `session.text` for downstream export operations after a
+  // signature is inserted. Track N is forbidden from editing OutputColumn.jsx
+  // and App.jsx (where the canonical session-update callback lives), so we
+  // keep the appended text here in ExportBar's own state. The override is
+  // also written to localStorage.ogOCR_sessions so a page reload reflects
+  // the change. Keyed by session id so switching sessions clears the
+  // override automatically.
+  const [textOverride, setTextOverride] = useState(null); // { sessionId, text }
   const folderMenuRef = useRef(null);
   const folderInputRef = useRef(null);
 
-  const noContent = !session || (!session.text && !session.svg);
+  // Drop a stale override on the fly without an effect (calling setState in
+  // an effect to derive props is forbidden by react-hooks/set-state-in-effect
+  // — see the React docs note "you might not need an effect"). The override
+  // is only applied when (a) there's an active session, (b) the override
+  // belongs to that session, and (c) the live session.text hasn't already
+  // caught up. Otherwise we read straight from session.text.
+  const overrideApplies = !!textOverride
+    && !!session
+    && textOverride.sessionId === session.id
+    && session.text !== textOverride.text;
+  const effectiveText = overrideApplies
+    ? textOverride.text
+    : (session?.text || '');
+
+  const noContent = !session || (!effectiveText && !session.svg);
   const noSvg = !session?.svg;
-  const content = session?.svg || session?.text || '';
+  const content = session?.svg || effectiveText || '';
   const rawBase = (session?.exportName?.trim() || session?.filename || 'ogOCR_Document');
   const baseName = rawBase.replace(/\.[^.]+$/, '');
 
@@ -413,7 +437,7 @@ function ExportBar({ session, onShowToast, processing }) {
     if (session.svg) {
       downloadBlob(session.svg, baseName + '.svg', 'image/svg+xml');
     } else {
-      downloadBlob(session.text, baseName + '.md', 'text/markdown');
+      downloadBlob(effectiveText, baseName + '.md', 'text/markdown');
     }
   };
 
@@ -432,6 +456,42 @@ function ExportBar({ session, onShowToast, processing }) {
     }
     await exportDocx({ markdown: md, filename: baseName + '.docx' });
   };
+
+  // Append the signature SVG to the active session's text. Track N can't edit
+  // OutputColumn.jsx or App.jsx (the canonical setSessions callback isn't
+  // forwarded to ExportBar), so the propagation pattern is two-pronged:
+  //   1) Set a local `textOverride` keyed to the active session id. Every
+  //      ExportBar action (Save .md, Drive, Email, Copy, Classroom) reads
+  //      from `effectiveText` so they pick up the appended signature.
+  //   2) Persist the updated session.text to localStorage.ogOCR_sessions so
+  //      the change survives a page reload (App.jsx hydrates sessions from
+  //      that key on boot). App.jsx's 400 ms debounced write owns the key
+  //      thereafter, but it writes the same data it already holds in state
+  //      so there's nothing to clobber.
+  const handleSignatureInsert = useCallback((svgString) => {
+    if (!session) return;
+    const trimmed = (svgString || '').trim();
+    if (!trimmed) return;
+    const baseText = effectiveText || '';
+    const sep = baseText.length > 0 ? '\n\n' : '';
+    const appended = baseText + sep + trimmed + '\n';
+    setTextOverride({ sessionId: session.id, text: appended });
+    try {
+      const raw = localStorage.getItem('ogOCR_sessions');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          const next = arr.map(s => (s && s.id === session.id
+            ? { ...s, text: appended, date: Date.now() }
+            : s));
+          localStorage.setItem('ogOCR_sessions', JSON.stringify(next));
+        }
+      }
+    } catch {
+      /* best-effort persistence — App.jsx's debounce will re-write shortly */
+    }
+    showInfo('Signature inserted — Save .md will include it.');
+  }, [session, effectiveText]);
 
   const handlePDF = () => {
     if (noContent) return;
@@ -522,6 +582,8 @@ function ExportBar({ session, onShowToast, processing }) {
     { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
     { id: 'docx',  glyph: '⌘', label: 'DOCX', onClick: handleDocx, disabled: noContent || !session?.text },
     { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
+    { id: 'sign',  glyph: '✎', label: 'Sign and save',
+      onClick: () => setSignatureOpen(true), disabled: !session },
   ];
   const shareItems = [
     { id: 'email',     glyph: emailGlyph, label: emailLabel, onClick: () => setEmailOpen(true),
@@ -670,6 +732,12 @@ function ExportBar({ session, onShowToast, processing }) {
         onClose={() => setEmailOpen(false)}
         onSubmit={submitEmail}
         busy={emailBusy}
+      />
+
+      <SignatureModal
+        open={signatureOpen}
+        onClose={() => setSignatureOpen(false)}
+        onInsert={handleSignatureInsert}
       />
     </>
   );
