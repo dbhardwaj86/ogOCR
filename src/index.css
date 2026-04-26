@@ -516,6 +516,45 @@ kbd, code { font-family: var(--mono); }
 .og-tile-hint  { grid-area: h; font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .og-tile-key   { grid-area: k; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); letter-spacing: 0.06em; }
 
+/* Refine row sits below the 4 action groups. Two-area grid (no key column)
+   since the keyboard shortcut isn't bound yet. */
+.og-action-group--refine .og-action-group-hint {
+  font-family: var(--mono); font-size: 9px; color: var(--ink-faint);
+  letter-spacing: 0.06em; text-transform: none;
+}
+.og-action-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; }
+.og-tile--refine {
+  grid-template-areas: "g l" "g h";
+  grid-template-columns: auto 1fr;
+}
+
+/* ===================================================================
+   Refinement tabs (Refine pill view)
+   =================================================================== */
+.og-rendered--refine { padding-top: 0; }
+.og-refine-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 16px;
+  padding-bottom: 0;
+}
+.og-refine-tab {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  background: transparent; border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: color var(--tx-fast) ease, border-color var(--tx-fast) ease;
+}
+.og-refine-tab:hover { color: var(--ink); }
+.og-refine-tab.is-active {
+  color: var(--accent-ink, var(--accent));
+  border-bottom-color: var(--accent);
+}
+.og-refine-body { min-height: 80px; }
+
 /* ===================================================================
    Output column
    =================================================================== */

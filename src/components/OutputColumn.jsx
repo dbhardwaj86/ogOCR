@@ -5,7 +5,8 @@ import ProcessingStrip from './ProcessingStrip';
 import ExportBar from './ExportBar';
 import PromptDock from './PromptDock';
 import InlineError from './InlineError';
-import { KIND_LABEL } from '../magicActions';
+import RefinementTabs from './RefinementTabs';
+import { KIND_LABEL, REFINE_ACTIONS } from '../magicActions';
 
 function OutputColumn({
   session,
@@ -22,7 +23,7 @@ function OutputColumn({
   onRetry,
   onDismissError,
 }) {
-  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source'
+  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -58,6 +59,17 @@ function OutputColumn({
 
   const lastError = session?.lastError && !processing ? session.lastError : null;
 
+  // Refine pill is hidden until at least one refinement key is populated.
+  const refinements = session?.refinements || null;
+  const populatedRefineKinds = refinements
+    ? REFINE_ACTIONS.map(a => a.kind).filter(k => typeof refinements[k] === 'string' && refinements[k].trim())
+    : [];
+  const hasRefinements = populatedRefineKinds.length > 0;
+
+  // If the user picked the Refine pill but the session no longer has any
+  // populated refinements (e.g. switched sessions), fall back to Preview.
+  const effectiveMode = mode === 'refine' && !hasRefinements ? 'rendered' : mode;
+
   return (
     <section className="og-output">
       <div className="og-output-head">
@@ -69,13 +81,20 @@ function OutputColumn({
         </div>
         <div className="og-output-modes">
           <button
-            className={'og-pill' + (mode === 'rendered' ? ' is-active' : '')}
+            className={'og-pill' + (effectiveMode === 'rendered' ? ' is-active' : '')}
             onClick={() => setMode('rendered')}
           >Preview</button>
           <button
-            className={'og-pill' + (mode === 'source' ? ' is-active' : '')}
+            className={'og-pill' + (effectiveMode === 'source' ? ' is-active' : '')}
             onClick={() => setMode('source')}
           >Markdown</button>
+          {hasRefinements && (
+            <button
+              className={'og-pill' + (effectiveMode === 'refine' ? ' is-active' : '')}
+              onClick={() => setMode('refine')}
+              title="View AI-refined versions of this document"
+            >Refine</button>
+          )}
           <button
             className="og-pill og-pill-secondary"
             onClick={onCompile}
@@ -147,15 +166,18 @@ function OutputColumn({
       )}
 
       <div className="og-output-canvas">
-        {mode === 'rendered' && (
+        {effectiveMode === 'rendered' && (
           <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} />
         )}
-        {mode === 'source' && (
+        {effectiveMode === 'source' && (
           <SourceDoc
             value={value}
             onChange={handleSourceChange}
             disabled={!!processing || !session}
           />
+        )}
+        {effectiveMode === 'refine' && (
+          <RefinementTabs refinements={refinements} populatedKinds={populatedRefineKinds} />
         )}
       </div>
 

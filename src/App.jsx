@@ -11,7 +11,7 @@ import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ErrorBoundary from './components/ErrorBoundary';
-import { MAGIC_ACTIONS } from './magicActions';
+import { MAGIC_ACTIONS, REFINE_ACTIONS, REFINE_KIND_BY_ID } from './magicActions';
 import { showError, installErrorSinks, showInfo } from './errors/showError';
 import { errFromResponse, errFromException } from './errors/errFromResponse';
 import { formatMessage } from './errors/codes';
@@ -35,17 +35,19 @@ function readJSON(key, fallback) {
   }
 }
 
-// Schema version. v2 keeps `session.images` as the structured array from
-// /api/extract-images so the compile builder can drop image blocks directly,
-// instead of treating the markdown blob as the source of truth.
-const SESSION_SCHEMA_VERSION = 2;
+// Schema version. v2 added structured `session.images`. v3 adds
+// `session.refinements` — a sibling block of AI-rewritten text keyed by
+// tone (`summary` / `bullets` / `formal` / `casual`). The migration is a
+// no-op for the new field (default `null`/`undefined` is fine) — we just
+// stamp the version so we don't re-migrate on every boot.
+const SESSION_SCHEMA_VERSION = 3;
 
 function migrateSession(s) {
   if (!s || typeof s !== 'object') return s;
   if (s.version === SESSION_SCHEMA_VERSION) return s;
-  // v1 → v2: leave existing text/svg in place; just stamp the version so we
-  // don't re-migrate. Legacy `images: text` markdown blobs continue to render
-  // through the markdown path until the user re-runs the action.
+  // v1 → v2 → v3: leave existing text/svg/images in place; just stamp the
+  // version so we don't re-migrate. `refinements` defaults to undefined and
+  // is populated lazily on the first refine action.
   return { ...s, version: SESSION_SCHEMA_VERSION };
 }
 
@@ -316,7 +318,22 @@ function App() {
   }, [stopProgress]);
 
   const runAction = useCallback(async (actionId, customPromptOverride) => {
-    if (!file) {
+    const refineAction = REFINE_ACTIONS.find(a => a.id === actionId);
+    const isRefine = !!refineAction;
+
+    // Refine actions skip the file-required early bail — they refine
+    // `session.text` rather than the uploaded file. They still need an
+    // active session with non-empty text to operate on.
+    if (isRefine) {
+      const sourceText = (activeSession?.text || '').trim();
+      if (!sourceText) {
+        showError('OCR_EMPTY', {
+          message: 'Run an action first to get text to refine.',
+          hint: 'Pick one of the 8 magic actions above before refining.',
+        });
+        return;
+      }
+    } else if (!file) {
       showError('OCR_BAD_FILE');
       return;
     }
@@ -325,12 +342,15 @@ function App() {
       return;
     }
 
-    const action = MAGIC_ACTIONS.find(a => a.id === actionId);
+    const action = isRefine ? null : MAGIC_ACTIONS.find(a => a.id === actionId);
     const endpoint = action?.endpoint || '/api/extract';
-    const prompt = customPromptOverride ?? action?.prompt ?? '';
+    const prompt = customPromptOverride
+      ?? (isRefine
+        ? `${refineAction.prompt}\n\nINPUT:\n${activeSession.text}`
+        : action?.prompt ?? '');
 
     let sessionId = activeSessionId;
-    if (!sessionId) sessionId = createNewSession(file.name);
+    if (!sessionId && !isRefine) sessionId = createNewSession(file.name);
 
     if (abortRef.current) abortRef.current.abort();
     abortRef.current = new AbortController();
@@ -343,7 +363,20 @@ function App() {
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      if (isRefine) {
+        // Server requires multipart with a `file` field (multer.single('file')).
+        // We're refining text, not a file — wrap the source text in a synthetic
+        // text/plain blob so the existing endpoint accepts it without server
+        // changes. Gemini accepts text/plain in inlineData for text inputs.
+        const synthetic = new File(
+          [activeSession.text],
+          'refine-input.txt',
+          { type: 'text/plain' }
+        );
+        formData.append('file', synthetic);
+      } else {
+        formData.append('file', file);
+      }
       if (prompt) formData.append('prompt', prompt);
 
       const r = await fetch(endpoint, { method: 'POST', body: formData, signal });
@@ -355,30 +388,47 @@ function App() {
         throw e;
       }
 
-      const updates = { kind: actionId };
       let hadResponse = false;
-      if (data.svg) {
-        updates.svg = data.svg;
-        updates.text = '';
-        hadResponse = true;
-      } else if (Array.isArray(data.images)) {
-        // Native image rendering path (schema v2): keep the structured array
-        // on `session.images`. RenderedDoc renders the grid natively; the
-        // text field stores only the summary line so the markdown path still
-        // works as a fallback for older renderers.
-        updates.images = data.images;
-        updates.svg = '';
-        if (data.images.length === 0) {
-          updates.text = '_No visual components found in this document._';
-        } else {
-          updates.text = data.message || `Found ${data.images.length} visual components.`;
+      let updates = {};
+
+      if (isRefine) {
+        // Refinements land on `session.refinements[kind]` — they don't
+        // overwrite `session.text` or `session.kind`, so the underlying
+        // extraction stays the source of truth.
+        if (typeof data.text === 'string' && data.text.trim()) {
+          const refineKind = REFINE_KIND_BY_ID[actionId];
+          const prevRefinements = activeSession?.refinements || {};
+          updates = {
+            refinements: { ...prevRefinements, [refineKind]: data.text },
+          };
+          hadResponse = true;
         }
-        hadResponse = true;
-      } else if (typeof data.text === 'string') {
-        updates.text = data.text;
-        updates.svg = '';
-        hadResponse = true;
+      } else {
+        updates = { kind: actionId };
+        if (data.svg) {
+          updates.svg = data.svg;
+          updates.text = '';
+          hadResponse = true;
+        } else if (Array.isArray(data.images)) {
+          // Native image rendering path (schema v2): keep the structured array
+          // on `session.images`. RenderedDoc renders the grid natively; the
+          // text field stores only the summary line so the markdown path still
+          // works as a fallback for older renderers.
+          updates.images = data.images;
+          updates.svg = '';
+          if (data.images.length === 0) {
+            updates.text = '_No visual components found in this document._';
+          } else {
+            updates.text = data.message || `Found ${data.images.length} visual components.`;
+          }
+          hadResponse = true;
+        } else if (typeof data.text === 'string') {
+          updates.text = data.text;
+          updates.svg = '';
+          hadResponse = true;
+        }
       }
+
       if (!hadResponse) {
         // Empty/malformed response — never claim success.
         const entry = formatMessage('OCR_EMPTY');
@@ -388,7 +438,8 @@ function App() {
       }
       updates.lastError = null;
       updateSession(sessionId, updates);
-      showInfo(`${action?.label || 'Run'} complete`);
+      const label = isRefine ? refineAction.label : (action?.label || 'Run');
+      showInfo(`${label} complete`);
     } catch (err) {
       if (err.name === 'AbortError') return;
       console.error(err);
@@ -405,7 +456,7 @@ function App() {
       if (!signal.aborted) finishProgress(myToken);
       if (abortRef.current?.signal === signal) abortRef.current = null;
     }
-  }, [file, processing, activeSessionId, createNewSession, updateSession, startProgress, finishProgress]);
+  }, [file, processing, activeSessionId, activeSession, createNewSession, updateSession, startProgress, finishProgress]);
 
   // Cmd/Ctrl + K → palette toggle. Shift+? → diagnostics. Esc closes overlays.
   // ⌥ + letter → run a magic action. We re-bind when `runAction` changes so we
