@@ -21,7 +21,7 @@ This is the live status of the 3-sprint implementation pass landing the [REVIEW_
 | Sprint | Status | Notes |
 |---|---|---|
 | **S1 — Stabilize & Observe** | ✅ **Complete** | Lint clean, tests passing 10/10, dev server boots, error envelope verified end-to-end via curl |
-| **S2 — Compose** | 🟡 **In progress (~55%)** | S2.1 ✅ · S2.2 ✅ · Tracks A/C/D landed (UX cleanup, wire stubs, AI refine). 44/44 tests pass. |
+| **S2 — Compose** | ✅ **Complete** | All sub-phases shipped. Tracks A/C/D + E/F/G/H/I merged. 74/74 tests pass; `npm run build` clean (main bundle 494 KB, down from 728 KB pre-sprint due to lazy-loaded chunks). Browser smoke pending. |
 | **S3 — Differentiate** | ☐ Not started | High-leverage features compounding on the compile block model |
 
 ---
@@ -206,30 +206,39 @@ Plan file: `C:\Users\abc\.claude\plans\status-check-did-you-sparkling-biscuit.md
 
 **Worktrees + branches:** the three worktrees (`ogOCR-track-a`, `ogOCR-track-c`, `ogOCR-track-d`) and their branches will be cleaned up after browser smoke confirms parity. Until then they stay as a rollback path.
 
-### Then S2.3: Compile export pipeline
+---
 
-- Print → PDF: extend [src/index.css:1280-1324](src/index.css) print rule to `.compile-page`.
-- Markdown bundle (`.md`): use existing `compileToMarkdown` from `compile.js`, route through `downloadBlob` in `ExportBar.jsx`.
-- HTML bundle (`.html`): use existing `compileToHtml`, route through `downloadBlob`.
-- Optional `POST /api/compile/pdf` (puppeteer) — defer unless trivial; gate behind `PDF_ENGINE=puppeteer` env var; fall back to `window.print()`.
+## Tracks E / F / G / H / I — shipped (S2 finish sprint)
 
-### Then S2.4: Multi-file batching & queue
+Plan file: `C:\Users\abc\.claude\plans\analyze-code-base-thoroughly-virtual-thunder.md`. Five parallel agents in isolated git worktrees; Wave 1 (E, G, H, I) ran off baseline `e967276`, Wave 2 (F) ran off post-Wave-1 HEAD `5b2b695`. Merged in order **E → G → H → I → F**. One trivial conflict on `package-lock.json` (regenerated via `npm install`); rest auto-merged.
 
-- Server: change `multer.single('file')` → `multer.array('files', 20)` on extract routes. Per-request body cap 200 MiB.
-- New `src/queue.js` — sequential client-side queue manager.
-- New `src/components/QueueRail.jsx` — appears in `LibraryRail` when items pending.
-- `UploadCard.jsx` accepts multi-file drops (currently rejects via `CAP_MULTI_FILE`).
-- Mobile: sticky `Queue (3 of 12)` chip atop Library tab.
+| Track | Commit | Merge | Closes |
+|---|---|---|---|
+| **E — IndexedDB image storage** | `3639d96` | `116e848` | CRIT-1 (geminitmp review): migrates `session.images[].data` Base64 strings out of localStorage and into IndexedDB via new `src/storage/idb.js` (`idb-keyval` + `fake-indexeddb` for tests). Schema bumped v3 → v4 with lazy on-mount migration. localStorage now stores `{id, desc}` per image only (~200 bytes/image vs. several KB). Adds `IDB_QUOTA`, `IDB_INIT_FAIL`, `IDB_MIGRATION_FAIL` codes. Cascading IDB cleanup on `deleteSession`. **Residual:** compile blocks of kind `image` added via "send to compile" still embed data URLs in `block.src` — flagged as a smaller-radius leak for follow-up. |
+| **G — PDF preview (S2.5)** | `979c4df` | `82d2a37` | Lazy-loaded `pdfjs-dist@5.6.205` in `SourcePreview.jsx` and `UploadConfirmModal.jsx`. Worker config via `?url` dynamic import (no `vite.config.js` changes). Page 1 renders to canvas → cached as data URL. Graceful fallback to placeholder text if import fails. Bundle: pdfjs in own 405 KB lazy chunk; main bundle delta +2.82 KB. |
+| **H — Compile export + share sheet (S2.3 + S2.6 + S2.7)** | `66aed40` | `1e609a2` | `ExportBar.jsx` collapses 9 flat buttons into 3 dropdown menus (**Save**: Drive / MD-or-SVG / Print → PDF · **Share**: Email / Classroom / Link · **Export**: Copy / PNG / JSON). Mobile FAB (≤880 px) calls `navigator.share()` with bottom-sheet fallback. Recent-folders dropdown is keyboard-navigable (↓/↑/Enter/Esc). Adds `EXP_SHARE_API_UNAVAILABLE` and `EXP_GENERIC` codes. **Note:** CompileBuilder Save .md / .html / Print were already wired pre-track; print stylesheet already covers `.og-compile-page` so no `.compile-page` rule was added. `compile.js` unchanged. |
+| **I — UX surface polish (S2.8)** | `346814c` | `5b2b695` | Mermaid `Diagram` 4th pill in `OutputColumn.jsx` (visible when `kind === 'mermaid'` or fenced ` ```mermaid ` block detected); split textarea/preview lazy-loads `mermaid` with 300 ms debounced render. `LanguagePill.jsx` renders in `SourceColumn` head when `__detected_lang: <iso>` line is detected and stripped from rendered output (display-only MVP — override re-run deferred since it requires App.jsx changes). `ProcessingStrip` indeterminate stripe via transform-based `og-progress-march` keyframe (1.4 s linear). Bundle: mermaid lazy-loaded into ~40 chunks; main bundle dropped to 477 KB. Adds `OCR_MERMAID_RENDER_FAIL` code. |
+| **F — Multi-file queue (S2.4)** | `ac21875` | `f7d03f2` | New `src/queue.js` (pure-JS pubsub sequential queue: `enqueue` / `cancel` / `cancelAll` / `subscribe` + AbortController plumbing). `QueueRail.jsx` (inline `<style>`, no `index.css` touch) renders in `LibraryRail` when ≥1 pending. `UploadCard` multi-drop branches: 1 file → existing path, 2–20 → enqueue, >20 → reject with new `QUEUE_OVERFLOW` code. Server: `multer.array('files', 20)` on `/api/extract`, `/api/sketch-to-svg`, `/api/extract-images` with 200 MiB aggregate cap (20 × 10 MiB). Backward compat preserved via `pickUploadedFile(req)` helper. App.jsx queue runner does NOT delegate to `runAction` (state ownership conflict) — it creates a fresh session per item and writes via `updateSession`. |
 
-### Then S2.5: PDF preview
+**Verification (post-merge final):** `npm run lint` clean · `npm test` **74/74** (was 44 baseline; +30 across all five tracks) · `npm run build` clean — main bundle **494 KB** (was 728 KB pre-sprint; the drop is real, driven by lazy-loading mermaid/pdfjs/etc into separate chunks rather than bundling them eagerly) · `npm run dev` boots cleanly (Vite ready in 171 ms; Express on :3001; `/api/_status` returns 200).
 
-- Add `pdfjs-dist` (preview-only, **not** upload path).
-- Render page 1 to canvas in `SourcePreview.jsx:70` and `UploadConfirmModal.jsx:52-60`.
-- Note: CLAUDE.md flags this as Phase 12 backlog. Use dynamic import (`import('pdfjs-dist')`) so it doesn't bloat the main bundle.
+**Browser smoke (run after `taskkill //F //IM node.exe && npm run dev`):**
 
-### Then S2.6 → S2.9 → S2 verification → Sprint 3
+1. **Multi-file (Track F):** drop 5 images + 1 PDF on UploadCard → all 6 enqueue, extract sequentially, `QueueRail` shows per-row progress + cancel; cancel-all works.
+2. **PDF preview (Track G):** drop a PDF → UploadConfirmModal shows page-1 thumbnail; after import, SourcePreview shows page 1.
+3. **IndexedDB (Track E):** extract images → reload page → images still render. DevTools → Application → Local Storage → `ogOCR_sessions` should NOT contain `data:image/png;base64,…` strings.
+4. **Compile export (Track H):** open compile builder → add 2 session blocks + 1 text block → Save .md downloads, Save .html downloads (self-contained inlined images), Print → PDF prints with paginated blocks.
+5. **Share sheet (Track H):** desktop ExportBar shows 3 dropdown menus (Save/Share/Export), keyboard-navigable. Resize ≤880 px → single FAB triggers `navigator.share()` (or bottom-sheet fallback when the API is missing).
+6. **UX polish (Track I):** paste a fenced ` ```mermaid ` block in source → Diagram pill renders SVG; non-English doc shows LanguagePill with detected lang; mid-extract progress stripe goes indeterminate after 95%.
 
-Full list in plan file at `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`.
+**Worktrees + branches:** the five worktrees (`ogOCR-track-e`, `-f`, `-g`, `-h`, `-i`) and their branches stay as rollback path until browser smoke confirms parity. The earlier Track A/C/D worktrees from the prior sprint are still on disk and can be cleaned up at the same time.
+
+**Carryover for next sprint (Sprint 3):**
+
+- Compile `block.src` data-URL leak (smaller-radius IDB residual flagged by Track E)
+- LanguagePill **override re-run** (Track I deferred MVP — needs App.jsx hook)
+- Live LaTeX preview, table → spreadsheet block, voice annotation, page-to-section auto-grouping, signature capture, pen/stylus markup, per-token confidence heatmap, real PDF export (puppeteer)
+- Phase 13 design migration sub-phases 13.3–13.9
 
 ---
 
