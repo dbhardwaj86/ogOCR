@@ -209,6 +209,14 @@ export const ERRORS = Object.freeze({
   IDB_MIGRATION_FAIL: entry('IDB_MIGRATION_FAIL', SURFACE.TOAST, SEVERITY.WARN,
     "Couldn't migrate older session images.",
     'Old images stay where they were. New images will use the new storage.'),
+
+  // ── Signature capture ───────────────────────────────────────────────
+  SIG_LIBRARY_FULL: entry('SIG_LIBRARY_FULL', SURFACE.TOAST, SEVERITY.WARN,
+    'Signature library is full.',
+    'Delete an existing signature to make room (max 5).', false),
+  SIG_QUOTA: entry('SIG_QUOTA', SURFACE.TOAST, SEVERITY.ERROR,
+    "Couldn't save signature — storage is full.",
+    'Free up some space by clearing old sessions or signatures.'),
 });
 
 export function getError(code) {
