@@ -47,6 +47,32 @@ export const COPY = Object.freeze({
     sourcePane: 'Upload a document to begin.',
     outputPane: 'Nothing extracted yet — pick an action.',
   },
+  welcome: {
+    title: 'Welcome to ogOCR',
+    skip: 'Skip',
+    next: 'Next',
+    back: 'Back',
+    done: 'Get started',
+    trySample: 'Try a sample',
+    sampleFilename: 'sample-welcome.png',
+    slides: [
+      {
+        eyebrow: '01',
+        title: 'Drop or snap a file',
+        body: 'Drag a JPG, PNG, or PDF onto the rail — or use Snap a photo on mobile. We confirm the file before reading it.',
+      },
+      {
+        eyebrow: '02',
+        title: 'Pick an action',
+        body: 'Eight magic actions cover text, math, tables, sketches, and more. Need something else? Type it into the prompt at the top of the output pane.',
+      },
+      {
+        eyebrow: '03',
+        title: 'Save, share, export',
+        body: 'Send to Drive or email, copy the markdown, print to PDF, or stack pages in the Worksheet builder. Try a sample to see it end-to-end.',
+      },
+    ],
+  },
 });
 
 export default COPY;

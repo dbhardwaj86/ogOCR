@@ -1,25 +1,24 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import CornerBracket from './CornerBracket';
 import { showError } from '../errors/showError';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_TYPE_RE = /^(image\/|application\/pdf$)/;
-const LONG_PRESS_MS = 500;
-const MOVE_CANCEL_PX = 12;
 
+// Every drop / pick / camera-capture is routed through `onRequestPreview` so
+// the user lands in the UploadConfirmModal "Use this file" confirmation step.
+// The hidden long-press shortcut from earlier sprints is gone — confirmation
+// is the default path. `onUpload` remains as a fallback if a parent doesn't
+// wire the preview flow.
 function UploadCard({ onUpload, onRequestPreview }) {
   const inputRef = useRef(null);
   const cameraRef = useRef(null);
-  const pressTimerRef = useRef(null);
-  const isLongPressRef = useRef(false);
-  const pickModeRef = useRef('auto'); // 'auto' | 'preview'
-  const startPosRef = useRef({ x: 0, y: 0 });
   const [active, setActive] = useState(false);
-  const [longPressVisible, setLongPressVisible] = useState(false);
 
-  useEffect(() => () => {
-    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
-  }, []);
+  const handFile = (f) => {
+    if (onRequestPreview) onRequestPreview(f);
+    else onUpload(f);
+  };
 
   const validate = (f) => {
     if (!f) {
@@ -39,14 +38,7 @@ function UploadCard({ onUpload, onRequestPreview }) {
 
   const handlePick = (e) => {
     const f = e.target.files?.[0];
-    if (validate(f)) {
-      if (pickModeRef.current === 'preview' && onRequestPreview) {
-        onRequestPreview(f);
-      } else {
-        onUpload(f);
-      }
-    }
-    pickModeRef.current = 'auto';
+    if (validate(f)) handFile(f);
     e.target.value = '';
   };
 
@@ -59,54 +51,24 @@ function UploadCard({ onUpload, onRequestPreview }) {
       return;
     }
     const f = files[0];
-    if (validate(f)) onUpload(f);
-  };
-
-  const clearPressTimer = () => {
-    if (pressTimerRef.current) {
-      clearTimeout(pressTimerRef.current);
-      pressTimerRef.current = null;
-    }
-  };
-
-  const onPointerDown = (e) => {
-    isLongPressRef.current = false;
-    setLongPressVisible(false);
-    startPosRef.current = { x: e.clientX, y: e.clientY };
-    clearPressTimer();
-    pressTimerRef.current = setTimeout(() => {
-      isLongPressRef.current = true;
-      setLongPressVisible(true);
-    }, LONG_PRESS_MS);
-  };
-
-  const onPointerMove = (e) => {
-    if (!pressTimerRef.current) return;
-    const dx = Math.abs(e.clientX - startPosRef.current.x);
-    const dy = Math.abs(e.clientY - startPosRef.current.y);
-    if (dx > MOVE_CANCEL_PX || dy > MOVE_CANCEL_PX) clearPressTimer();
-  };
-
-  const onPointerUp = () => {
-    clearPressTimer();
-    setLongPressVisible(false);
-  };
-
-  const onPointerCancel = () => {
-    clearPressTimer();
-    setLongPressVisible(false);
-    isLongPressRef.current = false;
+    if (validate(f)) handFile(f);
   };
 
   const onCardClick = () => {
-    pickModeRef.current = isLongPressRef.current && onRequestPreview ? 'preview' : 'auto';
-    isLongPressRef.current = false;
     inputRef.current?.click();
+  };
+
+  const onCardKeyDown = (e) => {
+    // Buttons normally fire onClick on Enter/Space; we keep this explicit so
+    // assistive tech sees the activation path clearly.
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onCardClick();
+    }
   };
 
   const onCameraClick = (e) => {
     e.stopPropagation();
-    pickModeRef.current = 'auto';
     cameraRef.current?.click();
   };
 
@@ -114,17 +76,9 @@ function UploadCard({ onUpload, onRequestPreview }) {
     <>
       <button
         type="button"
-        className={
-          'og-upload-card' +
-          (active ? ' is-active' : '') +
-          (longPressVisible ? ' is-long-pressing' : '')
-        }
+        className={'og-upload-card' + (active ? ' is-active' : '')}
         onClick={onCardClick}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
-        onContextMenu={(e) => e.preventDefault()}
+        onKeyDown={onCardKeyDown}
         onDragEnter={(e) => { e.preventDefault(); setActive(true); }}
         onDragOver={(e) => e.preventDefault()}
         onDragLeave={() => setActive(false)}
