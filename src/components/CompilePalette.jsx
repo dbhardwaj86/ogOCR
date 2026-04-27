@@ -21,6 +21,70 @@ function CompileList({ compiles, activeCompileId, onSelect, onCreate, onDelete, 
     setEditingId(null);
   };
 
+  // v3 — split auto-compiles (sourceId set) from manual cross-source ones
+  // so the user can scan their per-source worksheets at a glance. Auto
+  // group renders first; both sections retain the original ordering.
+  const autoCompiles = compiles.filter(c => c && typeof c.sourceId === 'string' && c.sourceId);
+  const manualCompiles = compiles.filter(c => !c || typeof c.sourceId !== 'string' || !c.sourceId);
+
+  const renderRow = (c) => {
+    const active = c.id === activeCompileId;
+    const isEditing = editingId === c.id;
+    const isAuto = typeof c.sourceId === 'string' && !!c.sourceId;
+    return (
+      <li
+        key={c.id}
+        className={'og-compile-palette-row' + (active ? ' is-active' : '')}
+      >
+        <button
+          type="button"
+          className="og-compile-palette-row-btn"
+          onClick={() => onSelect(c.id)}
+          onDoubleClick={() => startRename(c)}
+          aria-pressed={active}
+        >
+          {isEditing ? (
+            <input
+              autoFocus
+              className="og-compile-palette-rename"
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); }
+              }}
+            />
+          ) : (
+            <>
+              <span className="og-compile-palette-row-name">
+                {c.name || 'Untitled compile'}
+                {isAuto && (
+                  <span
+                    className="og-compile-palette-auto-badge"
+                    title="Auto-managed worksheet for this source — re-syncs on every extraction."
+                  >auto</span>
+                )}
+              </span>
+              <span className="og-compile-palette-row-meta">
+                {compileSummary(c)} · {shortDate(c.updatedAt)}
+              </span>
+            </>
+          )}
+        </button>
+        <button
+          type="button"
+          className="og-compile-palette-row-del"
+          onClick={() => onDelete(c.id)}
+          aria-label={`Delete ${c.name || 'compile'}`}
+          title={isAuto
+            ? 'Delete this source\'s worksheet — it will be rebuilt on the next extraction.'
+            : 'Delete compile'}
+        >×</button>
+      </li>
+    );
+  };
+
   return (
     <div className="og-compile-palette-section">
       <header className="og-compile-palette-head">
@@ -38,52 +102,14 @@ function CompileList({ compiles, activeCompileId, onSelect, onCreate, onDelete, 
         {compiles.length === 0 && (
           <li className="og-compile-palette-empty">No compiles yet — click + New.</li>
         )}
-        {compiles.map((c) => {
-          const active = c.id === activeCompileId;
-          const isEditing = editingId === c.id;
-          return (
-            <li
-              key={c.id}
-              className={'og-compile-palette-row' + (active ? ' is-active' : '')}
-            >
-              <button
-                type="button"
-                className="og-compile-palette-row-btn"
-                onClick={() => onSelect(c.id)}
-                onDoubleClick={() => startRename(c)}
-                aria-pressed={active}
-              >
-                {isEditing ? (
-                  <input
-                    autoFocus
-                    className="og-compile-palette-rename"
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
-                      if (e.key === 'Escape') { e.preventDefault(); setEditingId(null); }
-                    }}
-                  />
-                ) : (
-                  <>
-                    <span className="og-compile-palette-row-name">{c.name || 'Untitled compile'}</span>
-                    <span className="og-compile-palette-row-meta">
-                      {compileSummary(c)} · {shortDate(c.updatedAt)}
-                    </span>
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                className="og-compile-palette-row-del"
-                onClick={() => onDelete(c.id)}
-                aria-label={`Delete ${c.name || 'compile'}`}
-                title="Delete compile"
-              >×</button>
-            </li>
-          );
-        })}
+        {autoCompiles.length > 0 && (
+          <li className="og-compile-palette-subhead">By source</li>
+        )}
+        {autoCompiles.map(renderRow)}
+        {manualCompiles.length > 0 && autoCompiles.length > 0 && (
+          <li className="og-compile-palette-subhead">Manual</li>
+        )}
+        {manualCompiles.map(renderRow)}
       </ul>
     </div>
   );

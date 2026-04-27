@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { showError, showInfo } from '../errors/showError';
 import { errFromResponse, errFromException } from '../errors/errFromResponse';
 import { exportDocx } from '../exportDocx';
+import { buildSvgExports } from '../svgExports';
 import SignatureModal from './SignatureModal';
 
 const DRIVE_RECENT_KEY = 'ogOCR_drive_recent';
@@ -40,52 +41,75 @@ function rememberRecentFolder(path) {
   }
 }
 
-function exportPNG(svgString, filename = 'ogOCR_Export.png', onError) {
-  const div = document.createElement('div');
-  div.innerHTML = svgString;
-  const svgEl = div.querySelector('svg');
-  if (!svgEl) {
-    onError && onError('EXP_SVG_BROWSER_LIMIT', 'No <svg> root found in this content.');
-    return false;
-  }
-
-  const vb = svgEl.viewBox?.baseVal;
-  const w = parseFloat(svgEl.getAttribute('width')) || (vb?.width) || 800;
-  const h = parseFloat(svgEl.getAttribute('height')) || (vb?.height) || 600;
-  if (!svgEl.getAttribute('width')) svgEl.setAttribute('width', w);
-  if (!svgEl.getAttribute('height')) svgEl.setAttribute('height', h);
-
-  const svgData = new XMLSerializer().serializeToString(svgEl);
-  const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-
-  const img = new Image();
-  img.onload = () => {
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width || w;
-      canvas.height = img.height || h;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
-      const a = document.createElement('a');
-      a.href = canvas.toDataURL('image/png');
-      a.download = filename;
-      a.click();
-    } catch (err) {
-      onError && onError('EXP_SVG_BROWSER_LIMIT', err?.message);
-    } finally {
-      URL.revokeObjectURL(url);
+// Rasterize a single SVG string to a PNG or JPG download. Each SVG is
+// drawn at its own native viewBox dimensions — multi-SVG callers feed us
+// one SVG at a time and we never composite them onto a single canvas. The
+// white-fill is correct for both formats: PNG ignores it under transparent
+// pixels, JPG (which has no alpha) needs it to avoid a black background.
+//
+// Returns a promise that resolves on download trigger / rejects with the
+// same `(code, message)` shape the legacy onError callback used. The
+// onError callback path is kept for back-compat with existing call sites.
+function exportRaster(svgString, { format = 'png', filename, quality = 0.92, onError } = {}) {
+  return new Promise((resolve) => {
+    const div = document.createElement('div');
+    div.innerHTML = svgString;
+    const svgEl = div.querySelector('svg');
+    if (!svgEl) {
+      onError && onError('EXP_SVG_BROWSER_LIMIT', 'No <svg> root found in this content.');
+      resolve(false);
+      return;
     }
-  };
-  img.onerror = () => {
-    URL.revokeObjectURL(url);
-    onError && onError('EXP_SVG_BROWSER_LIMIT', 'Image failed to load before rasterization.');
-  };
-  img.src = url;
-  return true;
+
+    const vb = svgEl.viewBox?.baseVal;
+    const w = parseFloat(svgEl.getAttribute('width')) || (vb?.width) || 800;
+    const h = parseFloat(svgEl.getAttribute('height')) || (vb?.height) || 600;
+    if (!svgEl.getAttribute('width')) svgEl.setAttribute('width', w);
+    if (!svgEl.getAttribute('height')) svgEl.setAttribute('height', h);
+
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const mime = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const ext = mime === 'image/jpeg' ? '.jpg' : '.png';
+    const finalName = filename
+      ? (/\.(png|jpe?g)$/i.test(filename) ? filename : filename + ext)
+      : 'ogOCR_Export' + ext;
+
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width || w;
+        canvas.height = img.height || h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        const a = document.createElement('a');
+        a.href = mime === 'image/jpeg'
+          ? canvas.toDataURL(mime, quality)
+          : canvas.toDataURL(mime);
+        a.download = finalName;
+        a.click();
+        resolve(true);
+      } catch (err) {
+        onError && onError('EXP_SVG_BROWSER_LIMIT', err?.message);
+        resolve(false);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      onError && onError('EXP_SVG_BROWSER_LIMIT', 'Image failed to load before rasterization.');
+      resolve(false);
+    };
+    img.src = url;
+  });
 }
+
 
 function downloadBlob(content, filename, type) {
   const blob = new Blob([content], { type });
@@ -271,7 +295,6 @@ function ExportBar({ session, onShowToast, processing }) {
     : (session?.text || '');
 
   const noContent = !session || (!effectiveText && !session.svg);
-  const noSvg = !session?.svg;
   const content = session?.svg || effectiveText || '';
   const rawBase = (session?.exportName?.trim() || session?.filename || 'ogOCR_Document');
   const baseName = rawBase.replace(/\.[^.]+$/, '');
@@ -498,10 +521,36 @@ function ExportBar({ session, onShowToast, processing }) {
     window.print();
   };
 
-  const handlePNG = () => {
-    if (!session?.svg) return;
-    exportPNG(session.svg, baseName + '.png', (code, message) => {
-      showError(code, message ? { hint: message } : {});
+  // v3 — raster export covers both `session.svg` and every vectorized
+  // sketch in `session.sketches[]`. Single-SVG state emits one file per
+  // click; multi-SVG state walks the deduplicated list and emits one file
+  // per SVG (no compositing — each SVG keeps its own viewBox dimensions).
+  // The 60ms breather between clicks dodges Chromium's same-origin
+  // download dedup that would otherwise fold N rapid clicks into one.
+  const svgExports = buildSvgExports(session, baseName);
+  const onRasterError = (code, message) => {
+    showError(code, message ? { hint: message } : {});
+  };
+  const handleRasterAll = async (format) => {
+    if (svgExports.length === 0) return;
+    for (let i = 0; i < svgExports.length; i++) {
+      const item = svgExports[i];
+      await exportRaster(item.svg, {
+        format,
+        filename: item.filename,
+        onError: onRasterError,
+      });
+      if (i < svgExports.length - 1) {
+        await new Promise(r => setTimeout(r, 60));
+      }
+    }
+  };
+  const handleRasterSingle = (format) => {
+    if (svgExports.length !== 1) return;
+    return exportRaster(svgExports[0].svg, {
+      format,
+      filename: svgExports[0].filename,
+      onError: onRasterError,
     });
   };
 
@@ -592,10 +641,32 @@ function ExportBar({ session, onShowToast, processing }) {
       disabled: noContent || processing || classroomBusy },
     { id: 'link',      glyph: '∞', label: 'Link', onClick: handleLink, disabled: false },
   ];
+  // Raster items are state-driven (see `buildSvgExports`):
+  //   0 SVGs → no PNG/JPG entries (button row is implicit-disabled)
+  //   1 SVG  → "PNG" + "JPG", each emits one file
+  //   ≥2 SVGs → "All as PNG" + "All as JPG", each emits N separate files
+  const rasterItems = svgExports.length === 0
+    ? []
+    : svgExports.length === 1
+      ? [
+          { id: 'png', glyph: '▦', label: 'PNG', onClick: () => handleRasterSingle('png'), disabled: false },
+          { id: 'jpg', glyph: '▦', label: 'JPG', onClick: () => handleRasterSingle('jpg'), disabled: false },
+        ]
+      : [
+          { id: 'png-all', glyph: '▦',
+            label: `All as PNG (${svgExports.length})`,
+            onClick: () => handleRasterAll('png'),
+            disabled: false },
+          { id: 'jpg-all', glyph: '▦',
+            label: `All as JPG (${svgExports.length})`,
+            onClick: () => handleRasterAll('jpg'),
+            disabled: false },
+        ];
+
   const exportItems = [
     { id: 'copy', glyph: copied ? '✓' : '❐', label: copied ? 'Copied' : 'Copy',
       onClick: handleCopy, disabled: noContent },
-    { id: 'png',  glyph: '▦', label: 'PNG',  onClick: handlePNG, disabled: noSvg },
+    ...rasterItems,
     { id: 'json', glyph: '{}',label: 'JSON', onClick: handleJSON, disabled: !session },
   ];
 

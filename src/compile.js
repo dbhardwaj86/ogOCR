@@ -19,6 +19,14 @@
 //        URI form) or `resolveCompileImageObjectUrls` (object URL form)
 //        before exporting / rendering. The migration is idempotent —
 //        running it twice on a v2 compile is a no-op.
+//   v3 — per-source auto-compiled worksheets. Adds `compile.sourceId`
+//        (string | null; null = manual cross-source compile, a session id =
+//        system-managed auto-compile bound to that session) and
+//        `block.role` (`'manual'` | `'auto:text'` | `'auto:svg:main'` |
+//        `'auto:svg:sketch-<id>'` | `'auto:image:<imgId>'` |
+//        `'auto:refinement:<kind>'`). `syncAutoBlocks(compile, session)`
+//        reconciles all auto-tagged blocks from a session snapshot;
+//        manual blocks and user drag-reorders are never touched.
 
 import { sanitizeSvg } from './svgSanitize';
 import {
@@ -27,7 +35,7 @@ import {
   blobToDataURL,
 } from './storage/idb';
 
-export const COMPILE_SCHEMA_VERSION = 2;
+export const COMPILE_SCHEMA_VERSION = 3;
 export const COMPILE_STORAGE_KEY = 'ogOCR_compiles';
 export const ACTIVE_COMPILE_KEY = 'ogOCR_active_compile';
 
@@ -40,13 +48,56 @@ export const BLOCK_KINDS = Object.freeze({
   EQUATION: 'equation',
 });
 
+// Block-role tags for the per-source auto-compile sync (v3). Manual blocks
+// (added through the palette / insert rail) wear `'manual'`; auto-managed
+// blocks wear one of the `auto:*` tags below. Sync targets the right slot
+// without ever touching `'manual'` blocks.
+export const BLOCK_ROLES = Object.freeze({
+  MANUAL: 'manual',
+  AUTO_TEXT: 'auto:text',
+  AUTO_SVG_MAIN: 'auto:svg:main',
+});
+
+export function autoSvgSketchRole(sketchId) {
+  return `auto:svg:sketch-${sketchId}`;
+}
+export function autoImageRole(imgId) {
+  return `auto:image:${imgId}`;
+}
+export function autoRefinementRole(kind) {
+  return `auto:refinement:${kind}`;
+}
+
+export function isAutoRole(role) {
+  return typeof role === 'string' && role.startsWith('auto:');
+}
+
+// Canonical-order rank for auto-tagged blocks. Manual blocks return Infinity
+// so they don't participate in canonical ordering — their position is
+// preserved as-is when sync runs.
+export function autoRoleRank(role) {
+  if (role === BLOCK_ROLES.AUTO_TEXT) return 0;
+  if (role === BLOCK_ROLES.AUTO_SVG_MAIN) return 1;
+  if (typeof role === 'string' && role.startsWith('auto:svg:sketch-')) return 2;
+  if (typeof role === 'string' && role.startsWith('auto:image:')) return 3;
+  if (role === 'auto:refinement:summary') return 4;
+  if (role === 'auto:refinement:bullets') return 5;
+  if (role === 'auto:refinement:formal') return 6;
+  if (role === 'auto:refinement:casual') return 7;
+  return Infinity;
+}
+
 const PAGE_SIZES = ['a4', 'letter'];
 
 export function newId(prefix = 'b') {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-export function createCompile({ name = 'Untitled compile', theme = 'paper' } = {}) {
+export function createCompile({
+  name = 'Untitled compile',
+  theme = 'paper',
+  sourceId = null,
+} = {}) {
   const ts = Date.now();
   return {
     id: newId('c'),
@@ -58,6 +109,7 @@ export function createCompile({ name = 'Untitled compile', theme = 'paper' } = {
     theme,
     header: '',
     footer: '',
+    sourceId,
     version: COMPILE_SCHEMA_VERSION,
   };
 }
@@ -70,9 +122,17 @@ export function migrateCompile(c) {
   // (async) which the App calls once after mount. Keeping the sync migration
   // free of IO mirrors the v3 → v4 session-image pattern in App.jsx — a
   // synchronous IDB write would block the initial render.
+  // v2 → v3: default `sourceId` to null (manual cross-source compile) and
+  // tag every existing block with `role: 'manual'` so auto-sync never
+  // touches user-built compiles retroactively.
+  const blocks = Array.isArray(c.blocks)
+    ? c.blocks.map(b => (b && !b.role ? { ...b, role: BLOCK_ROLES.MANUAL } : b))
+    : [];
   return {
     ...createCompile({ name: c.name }),
     ...c,
+    blocks,
+    sourceId: typeof c.sourceId === 'string' ? c.sourceId : null,
     version: COMPILE_SCHEMA_VERSION,
   };
 }
@@ -198,12 +258,16 @@ export function touchCompile(compile) {
 }
 
 export function addBlock(compile, block) {
-  const withId = block.id ? block : { ...block, id: newId() };
+  // Default to `'manual'` for any block added through the palette / insert
+  // rail — auto-sync writes its own role tag explicitly via `syncAutoBlocks`.
+  const withDefaults = { role: BLOCK_ROLES.MANUAL, ...block };
+  const withId = withDefaults.id ? withDefaults : { ...withDefaults, id: newId() };
   return touchCompile({ ...compile, blocks: [...compile.blocks, withId] });
 }
 
 export function insertBlock(compile, block, index) {
-  const withId = block.id ? block : { ...block, id: newId() };
+  const withDefaults = { role: BLOCK_ROLES.MANUAL, ...block };
+  const withId = withDefaults.id ? withDefaults : { ...withDefaults, id: newId() };
   const next = compile.blocks.slice();
   const i = Math.max(0, Math.min(index, next.length));
   next.splice(i, 0, withId);
@@ -432,4 +496,181 @@ export function compileSummary(compile) {
     return acc;
   }, {});
   return Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(' · ') || 'empty';
+}
+
+// --- v3 per-source auto-compile sync ---------------------------------------
+
+const REFINE_KIND_ORDER = ['summary', 'bullets', 'formal', 'casual'];
+
+// Build the desired ordered list of `{role, blockSpec}` from a session
+// snapshot. Each entry describes one auto block the worksheet should hold.
+// Used by `syncAutoBlocks` to diff against the existing compile.
+//
+// Dedup rule: when `session.svg` matches a vectorized sketch's svg byte-
+// for-byte, we skip emitting `auto:svg:main` because it's just a focused
+// view of that sketch (set by `openSketch`) and the sketch already has its
+// own `auto:svg:sketch-<id>` block.
+export function computeDesiredAutoBlocks(session) {
+  const out = [];
+  if (!session || typeof session !== 'object') return out;
+
+  const text = typeof session.text === 'string' ? session.text : '';
+  if (text.trim()) {
+    out.push({
+      role: BLOCK_ROLES.AUTO_TEXT,
+      blockSpec: { kind: BLOCK_KINDS.TEXT, text },
+    });
+  }
+
+  const sketches = Array.isArray(session.sketches) ? session.sketches : [];
+  const mainSvg = typeof session.svg === 'string' ? session.svg : '';
+  const mainIsFromSketch = mainSvg
+    && sketches.some(sk => sk && typeof sk.svg === 'string' && sk.svg && sk.svg === mainSvg);
+
+  if (mainSvg.trim() && !mainIsFromSketch) {
+    out.push({
+      role: BLOCK_ROLES.AUTO_SVG_MAIN,
+      blockSpec: { kind: BLOCK_KINDS.SVG, svg: mainSvg },
+    });
+  }
+
+  for (const sk of sketches) {
+    if (!sk || sk.status !== 'done') continue;
+    if (typeof sk.svg !== 'string' || !sk.svg.trim()) continue;
+    out.push({
+      role: autoSvgSketchRole(sk.id),
+      blockSpec: {
+        kind: BLOCK_KINDS.SVG,
+        svg: sk.svg,
+        caption: sk.description || `Sketch ${sk.id}`,
+      },
+    });
+  }
+
+  const images = Array.isArray(session.images) ? session.images : [];
+  for (const img of images) {
+    if (!img || !img.id) continue;
+    out.push({
+      role: autoImageRole(img.id),
+      blockSpec: {
+        kind: BLOCK_KINDS.IMAGE,
+        // `data` may be null when the session hasn't hydrated from IDB yet.
+        // We still emit the block so its slot is held; renderers fall back
+        // to `[Image not loaded]`. Subsequent syncs replace `src` once
+        // hydration runs.
+        src: typeof img.data === 'string' && img.data ? img.data : null,
+        caption: img.desc || `Image ${img.id}`,
+      },
+    });
+  }
+
+  const refinements = (session.refinements && typeof session.refinements === 'object')
+    ? session.refinements
+    : null;
+  if (refinements) {
+    for (const kind of REFINE_KIND_ORDER) {
+      const txt = refinements[kind];
+      if (typeof txt === 'string' && txt.trim()) {
+        out.push({
+          role: autoRefinementRole(kind),
+          blockSpec: { kind: BLOCK_KINDS.TEXT, text: txt },
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+// Insert `newBlock` into `blocks` at its canonical position relative to
+// existing auto-tagged blocks. Manual blocks are skipped — their positions
+// are preserved as the user left them. If no auto block of higher rank
+// exists, the new block is appended at the end of the list. Pure: returns
+// a new array.
+function insertAtCanonicalPosition(blocks, newBlock) {
+  const newRank = autoRoleRank(newBlock.role);
+  const idx = blocks.findIndex(b => isAutoRole(b?.role) && autoRoleRank(b.role) > newRank);
+  if (idx === -1) return [...blocks, newBlock];
+  return [...blocks.slice(0, idx), newBlock, ...blocks.slice(idx)];
+}
+
+// Reconcile the auto-tagged blocks in `compile` against a fresh session
+// snapshot. Three rules:
+//   1. Every existing auto block whose role is still desired is updated
+//      in place (its `id` and array position are preserved — so user drag-
+//      reorders survive).
+//   2. Auto blocks whose role is no longer desired are removed.
+//   3. Newly-desired roles are inserted at their canonical position (see
+//      `autoRoleRank`).
+// Manual blocks are never touched. Returns the same compile reference if
+// nothing changed (lets callers skip the state write).
+export function syncAutoBlocks(compile, session) {
+  if (!compile || !Array.isArray(compile.blocks)) return compile;
+
+  const desired = computeDesiredAutoBlocks(session);
+  const desiredByRole = new Map(desired.map(d => [d.role, d.blockSpec]));
+
+  let changed = false;
+  const filtered = [];
+  for (const b of compile.blocks) {
+    if (!isAutoRole(b?.role)) {
+      filtered.push(b);
+      continue;
+    }
+    const want = desiredByRole.get(b.role);
+    if (!want) {
+      changed = true;
+      continue;
+    }
+    // Update in place: preserve id + role + position; replace content.
+    const next = { ...b, ...want, id: b.id, role: b.role };
+    if (!shallowEqualBlock(next, b)) changed = true;
+    filtered.push(next);
+  }
+
+  let blocks = filtered;
+  const presentRoles = new Set(filtered.filter(b => isAutoRole(b?.role)).map(b => b.role));
+  for (const d of desired) {
+    if (presentRoles.has(d.role)) continue;
+    blocks = insertAtCanonicalPosition(blocks, {
+      ...d.blockSpec,
+      role: d.role,
+      id: newId(),
+    });
+    changed = true;
+  }
+
+  if (!changed) return compile;
+  return { ...compile, blocks, updatedAt: Date.now() };
+}
+
+// Block-shape equality at the level of fields that matter for the in-place
+// update (kind, role, text/svg/src/caption). Used to avoid spurious
+// `updatedAt` bumps when the sync would have produced an identical block.
+function shallowEqualBlock(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.kind === b.kind
+    && a.role === b.role
+    && a.text === b.text
+    && a.svg === b.svg
+    && a.src === b.src
+    && a.caption === b.caption;
+}
+
+// Find the auto-compile bound to `sessionId`, or null. Used by App.jsx to
+// route the Worksheet button to the active session's auto-compile.
+export function findAutoCompileForSession(sessionId, compiles) {
+  if (!sessionId || !Array.isArray(compiles)) return null;
+  return compiles.find(c => c && c.sourceId === sessionId) || null;
+}
+
+// Build the default name for a session's auto-compile. Centralised so the
+// label stays consistent across the create-on-first-extract path and the
+// palette grouping/badging.
+export function defaultAutoCompileName(session) {
+  const fname = (session && typeof session.filename === 'string' && session.filename.trim())
+    ? session.filename
+    : 'Untitled';
+  return `${fname} — Worksheet`;
 }

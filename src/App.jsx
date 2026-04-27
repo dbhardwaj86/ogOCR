@@ -25,6 +25,10 @@ import {
   migrateCompile,
   migrateCompileImagesToIDB,
   compileNeedsIDBOffload,
+  syncAutoBlocks,
+  findAutoCompileForSession,
+  defaultAutoCompileName,
+  computeDesiredAutoBlocks,
 } from './compile';
 import { readSessionParam, urlWithoutSessionParam, resolveSessionId } from './deepLink';
 import {
@@ -485,7 +489,49 @@ function App() {
       return prev.filter(s => s.id !== id);
     });
     setActiveSessionId(curr => curr === id ? null : curr);
+    // v3 cascade: drop the auto-compile bound to this source. Manual cross-
+    // source compiles (sourceId === null) are never touched.
+    setCompiles(prev => {
+      const auto = prev.find(c => c && c.sourceId === id);
+      if (!auto) return prev;
+      return prev.filter(c => c.id !== auto.id);
+    });
+    setActiveCompileId(curr => {
+      // If the deleted session's auto-compile was active, fall back to none.
+      // The next openCompiler call will pick the right one.
+      return curr;
+    });
   }, []);
+
+  // v3 — keep the auto-compile bound to a session in lockstep with the
+  // session's extracted outputs. Called at every extraction completion
+  // point (runAction, vectorizeSketch, queue runner, openSketch). Lazy-
+  // creates the auto-compile on first sync so users with empty sessions
+  // don't get spurious compiles. Idempotent: `syncAutoBlocks` returns the
+  // same compile reference when nothing changed, and we no-op the state
+  // write in that case.
+  const syncAutoCompileForSession = useCallback((sessionAfter) => {
+    if (!sessionAfter || !sessionAfter.id) return;
+    setCompiles(prev => {
+      const existing = findAutoCompileForSession(sessionAfter.id, prev);
+      if (!existing) {
+        // Nothing to sync if the session has no auto-syncable content yet
+        // — avoid creating an empty compile that would clutter the palette.
+        const desired = computeDesiredAutoBlocks(sessionAfter);
+        if (desired.length === 0) return prev;
+        const fresh = makeCompile({
+          name: defaultAutoCompileName(sessionAfter),
+          sourceId: sessionAfter.id,
+          theme,
+        });
+        const synced = syncAutoBlocks(fresh, sessionAfter);
+        return [synced, ...prev];
+      }
+      const synced = syncAutoBlocks(existing, sessionAfter);
+      if (synced === existing) return prev;
+      return prev.map(c => (c.id === existing.id ? synced : c));
+    });
+  }, [theme]);
 
   const handleUpload = useCallback((newFile) => {
     setFile(newFile);
@@ -725,6 +771,16 @@ function App() {
       }
       updates.lastError = null;
       updateSession(sessionId, updates);
+      // v3 — auto-append every extraction result to the source's worksheet.
+      // Synthesize the post-update session snapshot from the closure-captured
+      // active session (or a freshly-created skeleton if this run created
+      // the session via `createNewSession` above). Using a snapshot here
+      // sidesteps the setSessions-then-read race that would otherwise see
+      // stale state inside `setCompiles`'s updater.
+      const beforeSession = (activeSession && activeSession.id === sessionId)
+        ? activeSession
+        : { id: sessionId, filename: file?.name || 'Untitled', date: Date.now(), text: '', svg: '', kind: 'text' };
+      syncAutoCompileForSession({ ...beforeSession, ...updates });
       const label = isRefine ? refineAction.label : (action?.label || 'Run');
       showInfo(`${label} complete`);
     } catch (err) {
@@ -743,7 +799,7 @@ function App() {
       if (!signal.aborted) finishProgress(myToken);
       if (abortRef.current?.signal === signal) abortRef.current = null;
     }
-  }, [file, processing, activeSessionId, activeSession, createNewSession, updateSession, startProgress, finishProgress]);
+  }, [file, processing, activeSessionId, activeSession, createNewSession, updateSession, startProgress, finishProgress, syncAutoCompileForSession]);
 
   // Phase 15 — vectorize a single detected sketch by id. Posts to
   // /api/sketch-to-svg with the sketch's bbox + page; the server crops
@@ -784,10 +840,26 @@ function App() {
         e.__registryEntry = entry;
         throw e;
       }
-      setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
-        ...s,
-        sketches: s.sketches.map(sk => sk.id === sketchId ? { ...sk, svg: data.svg, status: 'done' } : sk),
-      })));
+      // v3 — capture the post-update session inside the updater so we sync
+      // against the freshest state, not a closure-captured snapshot. This
+      // matters when `vectorizeAllSketches` runs vectorizeSketch in a loop:
+      // each iteration's outer-scope `session` is stale (taken before any
+      // sibling vectorize landed), so a closure-based sessionAfter would
+      // show only the latest sketch as `done` and the sync would prune
+      // every previously-synced sketch block.
+      let sessionAfter = null;
+      setSessions(prev => prev.map(s => {
+        if (s.id !== activeSessionId) return s;
+        const next = {
+          ...s,
+          sketches: s.sketches.map(sk =>
+            sk.id === sketchId ? { ...sk, svg: data.svg, status: 'done' } : sk
+          ),
+        };
+        sessionAfter = next;
+        return next;
+      }));
+      if (sessionAfter) syncAutoCompileForSession(sessionAfter);
       showInfo(`Sketch ${sketchId} vectorized`);
     } catch (err) {
       console.error(err);
@@ -798,7 +870,7 @@ function App() {
       const entry = err.__registryEntry || errFromException(err);
       showError(entry.code, { message: entry.message, hint: entry.hint });
     }
-  }, [file, activeSessionId, sessions]);
+  }, [file, activeSessionId, sessions, syncAutoCompileForSession]);
 
   // Phase 15 — sequentially vectorize every pending sketch on the active
   // session. Stops on the first error so the user can decide whether to
@@ -823,22 +895,38 @@ function App() {
     }
   }, [sessions, activeSessionId, vectorizeSketch]);
 
-  // Phase 15 — promote a vectorized sketch to the main canvas. Clears the
-  // sketches list so the picker pill collapses; user can re-detect by
-  // clicking the Sketch action again.
+  // Phase 15 (v3 update) — promote a vectorized sketch to the main canvas
+  // without destroying the picker. `session.sketches[]` is preserved so the
+  // user can return to the picker via the "Show all sketches" link in the
+  // focused view; previously the array was cleared, which forced an
+  // expensive re-detect to recover the multi-SVG state.
   const openSketch = useCallback((sketchId) => {
     if (!activeSessionId) return;
     const session = sessions.find(s => s.id === activeSessionId);
     const sketch = session?.sketches?.find(s => s.id === sketchId);
     if (!sketch?.svg) return;
-    updateSession(activeSessionId, {
+    const updates = {
       svg: sketch.svg,
       text: '',
       kind: 'sketch',
-      sketches: undefined,
-      selectedSketchId: undefined,
-    });
-  }, [sessions, activeSessionId, updateSession]);
+      selectedSketchId: sketchId,
+    };
+    updateSession(activeSessionId, updates);
+    if (session) syncAutoCompileForSession({ ...session, ...updates });
+  }, [sessions, activeSessionId, updateSession, syncAutoCompileForSession]);
+
+  // v3 — return to the multi-sketch picker after the user opened one
+  // sketch in the focused view. Clears `session.svg` so the rendered
+  // canvas falls back to the picker (which keys on `sketches.length >= 1`)
+  // while keeping every vectorized sketch intact.
+  const showAllSketches = useCallback(() => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+    const updates = { svg: '', selectedSketchId: undefined };
+    updateSession(activeSessionId, updates);
+    syncAutoCompileForSession({ ...session, ...updates });
+  }, [sessions, activeSessionId, updateSession, syncAutoCompileForSession]);
 
   // Queue runner: a multi-file drop enqueues into `src/queue.js`; the queue
   // calls back into here to run each file through the action endpoint. We
@@ -955,6 +1043,20 @@ function App() {
 
         updates.lastError = null;
         updateSession(sessionId, updates);
+        // v3 — auto-append queue extraction result to the new session's
+        // worksheet. The session was just created via `createNewSession`
+        // above with empty fields, so we synthesize the post-update shape
+        // from those known defaults.
+        const sessionAfter = {
+          id: sessionId,
+          filename: queuedFile.name,
+          date: Date.now(),
+          text: '',
+          svg: '',
+          kind: 'text',
+          ...updates,
+        };
+        syncAutoCompileForSession(sessionAfter);
         updateQueueProgress(item.id, 1);
         return sessionId;
       } catch (err) {
@@ -971,9 +1073,10 @@ function App() {
         stopTick();
       }
     });
-    // The runner closes over `createNewSession` / `updateSession`; both are
-    // stable callbacks (useCallback) so this effect runs at mount only.
-  }, [createNewSession, updateSession]);
+    // The runner closes over `createNewSession` / `updateSession` /
+    // `syncAutoCompileForSession`; all three are stable callbacks so this
+    // effect runs at mount only.
+  }, [createNewSession, updateSession, syncAutoCompileForSession]);
 
   // Cmd/Ctrl + K → palette toggle. Shift+? → diagnostics. Esc closes overlays.
   // ⌥ + letter → run a magic action. We re-bind when `runAction` changes so we
@@ -1088,12 +1191,24 @@ function App() {
 
   const openCompiler = useCallback(() => {
     setCompileOpen(true);
+    // v3 — when the user opens the worksheet from a source, prefer that
+    // source's auto-compile so they land on the consolidated output for
+    // what they've been extracting. Fall back to the prior selection / the
+    // first available compile so manual cross-source compiles still open
+    // when no source is active.
+    if (activeSessionId) {
+      const auto = findAutoCompileForSession(activeSessionId, compiles);
+      if (auto) {
+        setActiveCompileId(auto.id);
+        return;
+      }
+    }
     if (compiles.length === 0) {
       createCompile();
     } else if (!activeCompileId || !compiles.some(c => c.id === activeCompileId)) {
       setActiveCompileId(compiles[0].id);
     }
-  }, [compiles, activeCompileId, createCompile]);
+  }, [compiles, activeCompileId, activeSessionId, createCompile]);
 
   // Build palette action list (magic actions + system commands).
   const paletteActions = [
@@ -1168,6 +1283,7 @@ function App() {
             onVectorizeSketch={vectorizeSketch}
             onVectorizeAllSketches={vectorizeAllSketches}
             onOpenSketch={openSketch}
+            onShowAllSketches={showAllSketches}
           />
         </ErrorBoundary>
       </main>

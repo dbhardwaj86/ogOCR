@@ -1437,6 +1437,52 @@ kbd, code { font-family: var(--mono); }
   border-radius: var(--r-chip, 4px);
 }
 
+/* v3 — auto vs. manual compile separation in the palette. The "auto" pill
+   sits inline with the compile name; the subheads delineate the two
+   groups. Both are intentionally low-contrast — they're orientation aids,
+   not focal points. */
+.og-compile-palette-auto-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-ink, var(--accent));
+  background: var(--accent-soft);
+  border-radius: var(--r-chip, 4px);
+  vertical-align: middle;
+}
+.og-compile-palette-subhead {
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 8px 10px 2px;
+}
+
+/* v3 — focused-sketch view back-link, sits above the rendered canvas when
+   the user has drilled into a single sketch from the multi-sketch picker. */
+.og-output-back-strip {
+  padding: 6px 0;
+  display: flex;
+}
+.og-output-back-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent-ink, var(--accent));
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--r-chip, 4px);
+}
+.og-output-back-link:hover { background: var(--accent-soft); }
+
 .og-compile-palette-row--source { flex-direction: column; align-items: stretch; gap: 4px; padding: 4px; }
 
 .og-compile-palette-images {

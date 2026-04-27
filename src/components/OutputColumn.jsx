@@ -57,10 +57,10 @@ function OutputColumn({
   onCancel,
   onRetry,
   onDismissError,
-  sessionCount = 0,
   onVectorizeSketch,
   onVectorizeAllSketches,
   onOpenSketch,
+  onShowAllSketches,
 }) {
   const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation' | 'sketches'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
@@ -212,16 +212,14 @@ function OutputColumn({
             >Sketches ({session.sketches.length})</button>
           )}
           <button
-            className={'og-pill og-pill-secondary' + (sessionCount < 2 ? ' is-dim' : '')}
+            className="og-pill og-pill-secondary"
             onClick={onCompile}
-            // Worksheet stacks 2+ sessions into a printable artifact. Keep it
-            // visible on session #1 (so users discover it exists) but dim it
-            // via .is-dim until there's actually something to stack — pure
-            // visual cue, click handler stays live for power users.
-            title={sessionCount < 2
-              ? 'Compile is most useful with 2+ sessions — keep extracting to stack them.'
-              : 'Compile all sessions into a printable worksheet'}
-            style={sessionCount < 2 ? { opacity: 0.5 } : undefined}
+            // v3 — every source has its own auto-compiled worksheet that
+            // grows as the user extracts more outputs from it. The pill is
+            // useful from session #1, so the old `sessionCount < 2` dim
+            // treatment is gone. Cross-source manual compiles still work
+            // through the same button via the palette.
+            title="Open this source's auto-compiled worksheet — every extracted output appended automatically."
           >Worksheet</button>
         </div>
       </div>
@@ -289,6 +287,24 @@ function OutputColumn({
       )}
 
       <div className="og-output-canvas">
+        {/* v3 — "Show all sketches" affordance. Visible only when the user
+           opened a single sketch into the focused view (`session.svg` set)
+           AND the multi-sketch picker has 2+ sketches behind it
+           (`session.sketches`). Click returns to the picker without losing
+           any vectorized SVGs. */}
+        {effectiveMode === 'rendered'
+          && session?.svg
+          && Array.isArray(session?.sketches)
+          && session.sketches.length >= 2
+          && onShowAllSketches && (
+          <div className="og-output-back-strip print-hide">
+            <button
+              type="button"
+              className="og-output-back-link"
+              onClick={onShowAllSketches}
+            >← Show all sketches ({session.sketches.length})</button>
+          </div>
+        )}
         {effectiveMode === 'rendered' && (
           <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} />
         )}

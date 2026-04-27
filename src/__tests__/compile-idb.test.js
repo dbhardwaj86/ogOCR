@@ -28,8 +28,8 @@ beforeEach(async () => {
   await clearAllImages();
 });
 
-describe('compile schema migration (v1 → v2) — idempotent', () => {
-  it('migrateCompile stamps version 2 on a v1 compile', () => {
+describe('compile schema migration (v1 → current) — idempotent', () => {
+  it('migrateCompile stamps the current schema version on a v1 compile', () => {
     const legacy = {
       id: 'legacy_compile',
       name: 'Legacy',
@@ -38,8 +38,10 @@ describe('compile schema migration (v1 → v2) — idempotent', () => {
     };
     const m = migrateCompile(legacy);
     expect(m.version).toBe(COMPILE_SCHEMA_VERSION);
-    expect(m.version).toBe(2);
     // Blocks are preserved as-is by the sync migration; the IDB lift is async.
+    // The block's `src` survives the migration so the async IDB lift can pick
+    // it up. v3 also stamps a `role` on every block — see the v3 sync tests
+    // in compile.test.js for that contract.
     expect(m.blocks[0].src).toBe(PNG_DATA_URL);
   });
 
