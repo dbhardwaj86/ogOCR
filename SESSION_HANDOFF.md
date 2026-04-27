@@ -1,14 +1,53 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post v4 worksheet schema + unified Save picker)
-**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` (originally Multi-Sketch Detection; the Auto-Compile sprint extended it without a separate plan file)
+**Last updated:** 2026-04-27 (post carryover sprint: equation CSS, table onChange, langpill props, plan §3 gap close)
+**Plan file (latest pass):** `C:\Users\abc\.claude\plans\where-is-the-functionality-zesty-glacier.md` (Streamline Saving + Fix Output-Loss Bugs — drove the v4 + unified-Save commit `9c99826`; §3.1 / §3.3 closed in `9b907d0`)
+**Plan file (Multi-Sketch + Auto-Compile pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md`
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — v4 worksheet schema + unified Save picker** first, then the prior passes, then the original plan if you need context.
+Read **Latest pass — Carryover sprint** first, then the prior passes, then the original plan if you need context.
 
-## Latest pass — v4 worksheet schema + unified Save picker (2026-04-27)
+## Latest pass — Carryover sprint: equation CSS + table onChange + langpill props + plan §3 gaps (2026-04-27)
+
+**Why:** Three carryover items from Sprint 3 (Tracks J–N) were still open after the v4 + unified-Save sprint, plus two small gaps remained between commit `9c99826` and the latest plan file (`where-is-the-functionality-zesty-glacier.md`). All five items were small, scoped, and parallel-friendly — a perfect fit for a 4-track worktree dispatch.
+
+**What shipped (4 worktree branches merged + 1 follow-up commit):**
+
+| Track | Commit | Merge | Closes |
+|---|---|---|---|
+| **P — Equation CSS + tier styling** | `637e2e4` | (merge commit) | S3 Track L carryover (og-equation-* styles) — `EquationBlock.jsx` was functional but unstyled; track ships the full split-pane CSS mirroring `og-mermaid-*`. Plus `og-tile[data-tier]` differentiation for the action-tile prioritization in `MagicActions.jsx`. CSS-only file: `src/index.css` (+86 LOC). |
+| **Q — TableBlock onChange wiring** | `e80c802` | (merge commit) | S3 Track M carryover. New `replaceFirstGfmTable(text, { headers, rows })` exported from `TableBlock.jsx`; `RenderedDoc` now wires `onChange` into `<TableBlock>` and patches the FIRST GFM table region of the original text via that helper, then calls `onChangeText`. `OutputColumn` forwards `onUpdateSession` to `RenderedDoc`; `App.jsx` passes `onUpdateSession` to `OutputColumn` (mirrors the existing SourceColumn wiring). Edits to cells, sort, add row/col now persist across reload. +4 tests. |
+| **R — LanguagePill prop threading** | `a67a378` | (merge commit) | S3 Track K carryover. Removed the `og:language-override` window event + module-level `publishLanguageOverrides` signal store (~80 LOC). `SourceColumn` now passes `onLanguageOverride` + `overrideLang` + `sessionId` as plain props; `App.jsx` wires `onLanguageOverride` → `runAction(actionId, undefined, { languageOverride: lang })`. `auto` clears the override. New `languagePill.test.jsx` (13 cases) including a guard that fails if anyone reintroduces `window.dispatchEvent` from the pill. |
+| **T — Docs update for v4 + unified Save** | `a19b6b0` | (merge commit) | New "Latest pass" entry in `SESSION_HANDOFF.md` for commit `9c99826`; `CLAUDE.md` Latest-changes block updated for v4 + saveFormats + exportRaster + onUpdateSession; state-model and Output-rendering sections aligned to v4. `gemini.md` short timestamped append. |
+| **— Plan §3 gap close** | `9b907d0` | direct | Plan `where-is-the-functionality-zesty-glacier.md` §3.1: drop the `effectiveMode === 'rendered'` gate on the OutputColumn back-link so the picker is reachable from any mode (relied on auto-flip before). Plan §3.3: add 1 SketchesPicker mixed-status regression test + 5 unit tests on the back-link conditional shape so a future refactor can't silently reintroduce the mode gate. |
+
+**Verification (post-merge final):**
+- `npm run lint` → clean.
+- `npm test` → **239/239 passing** across 28 files (was 216/216 baseline — +4 Q + 13 R + 6 plan §3 = +23 net).
+- `npm run build` → clean.
+
+**Manual smoke matrix (still owed by user):**
+
+1. **Equation block (Track P):** run `Extract math` on a math image → `Equation` pill → split textarea ↔ KaTeX preview now has visible borders, mono labels, scrolling preview pane; ≤880px stacks vertically.
+2. **Action-tile tiers (Track P):** inspect `<button class="og-tile" data-tier="primary">` etc. — tertiary tiles should render visibly dimmer than primary (border weight + bg-tint).
+3. **Table cell edit (Track Q):** extract a doc with a markdown table → edit a cell → blur → click Source pill → confirm the markdown reflects the edit. Reload page → edit survives. Sort A→Z, Add row/col, Export CSV all persist.
+4. **LanguagePill override (Track R):** extract a non-English doc → click LanguagePill → pick French → action re-runs with override prompt; pill labels the override. Pick `Auto-detect` → override clears.
+5. **Sketch back-link (plan §3.1):** vectorize a sketch + Open → switch to Source mode → confirm the **← Show all sketches (N)** chip is STILL visible (was hidden before, gated on rendered mode).
+6. **Sketch in-flight survival (plan §3.3, no UI change):** trigger Vectorize All → click Open on the first done card mid-loop → other cards continue to `done`. (App-level test deferred — projection-layer regression covers the visible invariant.)
+
+**Worktrees + branches:** the four branches `track-p-eqn-css`, `track-q-table-onchange`, `track-r-langpill-props`, `track-t-docs` (worktrees at `C:/SandBox/claude_box/claudeOCR/ogOCR-track-{p,q,r,t}-*`) stay as rollback path until browser smoke confirms parity. The earlier track-{a–n} worktrees from prior sprints are still on disk.
+
+**Carryover for next sprint:**
+- **§3.3 voice annotation, §3.6 pen/stylus markup** — large exploratory features.
+- **§3.7 per-token confidence** — blocked on Gemini logprobs.
+- **§3.8 Real PDF export via puppeteer** — 300 MB install gate behind `PDF_ENGINE=puppeteer`.
+- **§3.4 page-to-section auto-grouping** — medium scope; still open.
+- **Phase 13.3–13.9 design migration** — top bar restyle next.
+- **Server endpoint cleanup** (per plan §out-of-scope): `/api/save-drive`, `/api/email`, `/api/classroom/draft` UI buttons are gone but the endpoints remain in `server/index.js`. Decommission as a separate small chore.
+
+## Prior pass — v4 worksheet schema + unified Save picker (2026-04-27)
 
 **Why:** Three pain points the v3 auto-compile UX surfaced:
 1. Re-running a *different* magic action (e.g. Math-to-LaTeX after Text Extract) overwrote the prior action's result in the worksheet — only the most-recent action kept its block, because v3 auto blocks were keyed by kind (`auto:text`, `auto:svg:main`) not by the action that produced them.
