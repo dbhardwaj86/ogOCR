@@ -12,7 +12,7 @@ import { sanitizeSvg } from '../svgSanitize';
 import { stripDetectedLang } from '../magicActions';
 import { ERRORS } from '../errors/codes';
 import EquationBlock from './EquationBlock';
-import TableBlock, { parseGfmTable } from './TableBlock';
+import TableBlock, { parseGfmTable, replaceFirstGfmTable } from './TableBlock';
 
 // Sprint 2.8a — detect a fenced ```mermaid block in extracted text. Exported
 // for testability so the unit suite doesn't have to lazy-load mermaid itself.
@@ -37,7 +37,12 @@ export function detectMermaidBlock(text) {
 // the first <table> in the document is replaced (any subsequent tables fall
 // back to the default styled <table>). Building components per-render keeps
 // the consumed flag scoped per render pass.
-function buildMdComponents(tableData) {
+//
+// Track Q — also accept `onTableChange`, which TableBlock fires on every
+// commit (cell edit, sort, add row/col). The caller here patches the first
+// GFM table region in the source text and forwards the patched text up
+// through `onChangeText`, so edits persist into `session.text`.
+function buildMdComponents(tableData, onTableChange) {
   let consumed = false;
   return {
     h1: ({ node, ...p }) => <h1 className="og-h1" {...p} />,
@@ -50,7 +55,13 @@ function buildMdComponents(tableData) {
     table: ({ node, ...p }) => {
       if (tableData && !consumed) {
         consumed = true;
-        return <TableBlock headers={tableData.headers} rows={tableData.rows} />;
+        return (
+          <TableBlock
+            headers={tableData.headers}
+            rows={tableData.rows}
+            onChange={onTableChange}
+          />
+        );
       }
       return <table className="og-table" {...p} />;
     },
@@ -185,7 +196,23 @@ function RenderedDoc({ text, svg, images, mode, onChangeText }) {
   // can swap react-markdown's default `<table>` renderer for the editable
   // TableBlock. We memo on cleanText so we don't re-parse on every render.
   const tableData = useMemo(() => parseGfmTable(cleanText), [cleanText]);
-  const mdComponents = useMemo(() => buildMdComponents(tableData), [tableData]);
+  // Track Q — when the user edits a cell / sorts / adds a row, TableBlock
+  // fires onChange with the new { headers, rows }. We rebuild the GFM table
+  // markdown and patch it back into the FIRST table region of the original
+  // (un-stripped) `text`, then forward through onChangeText so the parent
+  // persists into session.text. Running on the raw text keeps the trailing
+  // `__detected_lang` metadata line intact.
+  const handleTableChange = useMemo(() => {
+    if (typeof onChangeText !== 'function') return undefined;
+    return ({ headers, rows }) => {
+      const next = replaceFirstGfmTable(text || '', { headers, rows });
+      if (next !== text) onChangeText(next);
+    };
+  }, [text, onChangeText]);
+  const mdComponents = useMemo(
+    () => buildMdComponents(tableData, handleTableChange),
+    [tableData, handleTableChange],
+  );
 
   // Sprint 3.1 — equation mode: live LaTeX preview pane. Bypasses the
   // markdown render path entirely. Wires the textarea back to the session

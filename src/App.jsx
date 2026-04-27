@@ -468,13 +468,6 @@ function App() {
     ));
   }, []);
 
-  const updateActiveSession = useCallback((updates) => {
-    if (!activeSessionId) return;
-    setSessions(prev => prev.map(s =>
-      s.id === activeSessionId ? { ...s, ...updates } : s
-    ));
-  }, [activeSessionId]);
-
   const deleteSession = useCallback((id) => {
     setSessions(prev => {
       // Cascade-delete any image blobs owned by the dropped session so IDB
@@ -1285,7 +1278,7 @@ function App() {
             onRunPrompt={handleRunPrompt}
             onShowToast={showToast}
             onCompile={openCompiler}
-            onUpdateSession={updateActiveSession}
+            onUpdateSession={(updates) => activeSessionId && updateSession(activeSessionId, updates)}
             onCancel={cancelRunning}
             onRetry={retryLastAction}
             onDismissError={clearLastError}
