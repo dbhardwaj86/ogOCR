@@ -332,7 +332,12 @@ function OutputColumn({
           </div>
         )}
         {effectiveMode === 'rendered' && (
-          <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} />
+          <RenderedDoc
+            text={session?.text}
+            svg={session?.svg}
+            images={session?.images}
+            onChangeText={(next) => onUpdateSession && onUpdateSession({ text: next })}
+          />
         )}
         {effectiveMode === 'source' && (
           <SourceDoc

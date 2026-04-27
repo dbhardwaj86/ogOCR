@@ -78,6 +78,87 @@ export function tableToCsv(headers, rows) {
   return Papa.unparse({ fields: headers, data: rows });
 }
 
+// Track Q — serialize { headers, rows } back into canonical GFM markdown.
+// Format is byte-stable so a no-op edit round-trips through
+// `parseGfmTable → buildGfmTable → replaceFirstGfmTable` without diff churn.
+// Cell text is escaped: literal pipes inside a cell would break the row
+// shape, so we replace `|` with `\|` (the GFM escape) before joining.
+function escapeCell(value) {
+  const s = value == null ? '' : String(value);
+  return s.replace(/\|/g, '\\|');
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildGfmTable(headers, rows) {
+  const safeHeaders = Array.isArray(headers) ? headers : [];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const headerLine = `| ${safeHeaders.map(escapeCell).join(' | ')} |`;
+  const sepLine = `| ${safeHeaders.map(() => '---').join(' | ')} |`;
+  const rowLines = safeRows.map((row) => {
+    const cells = [];
+    for (let i = 0; i < safeHeaders.length; i++) {
+      cells.push(escapeCell(row?.[i] ?? ''));
+    }
+    return `| ${cells.join(' | ')} |`;
+  });
+  return [headerLine, sepLine, ...rowLines].join('\n');
+}
+
+// Find the [start, end) line indices of the first GFM table in `lines`.
+// Mirrors the scan in `parseGfmTable` so the two helpers agree on what
+// counts as a table (same fence handling, same separator rule).
+function findFirstGfmTableRange(lines) {
+  const isFence = (line) => /^\s*(`{3,}|~{3,})/.test(line);
+  let inFence = false;
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (isFence(lines[i])) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const headerLine = lines[i];
+    const sepLine = lines[i + 1];
+    if (!PIPE_LINE.test(headerLine)) continue;
+    if (!SEPARATOR.test(sepLine)) continue;
+    if (!/-/.test(sepLine)) continue;
+    let end = i + 2;
+    for (let j = i + 2; j < lines.length; j++) {
+      const row = lines[j];
+      if (isFence(row)) break;
+      if (!PIPE_LINE.test(row)) break;
+      if (SEPARATOR.test(row) && /-/.test(row)) break;
+      end = j + 1;
+    }
+    return { start: i, end };
+  }
+  return null;
+}
+
+// Track Q — replace the first GFM table region in `text` with the rebuilt
+// markdown for the supplied headers + rows. Preserves everything before and
+// after the table region byte-for-byte (including the line-ending style of
+// the surrounding text). Returns the original string unchanged when no GFM
+// table is detected — that way TableBlock's onChange is a safe no-op for
+// content that doesn't actually carry a table (defense in depth; in practice
+// onChange only fires when a TableBlock is rendered, which only happens
+// when a table was parsed in the first place).
+//
+// Idempotency: if the rebuilt table region already byte-matches the existing
+// region, we return the original `text` reference so downstream React memos
+// stay stable.
+// eslint-disable-next-line react-refresh/only-export-components
+export function replaceFirstGfmTable(text, { headers, rows } = {}) {
+  if (typeof text !== 'string' || !text) return text;
+  // Detect the line ending used by the input so the rebuilt table joins with
+  // the same flavor — important for round-trip stability on Windows files.
+  const eol = /\r\n/.test(text) ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  const range = findFirstGfmTableRange(lines);
+  if (!range) return text;
+  const rebuilt = buildGfmTable(headers, rows).split('\n');
+  const before = lines.slice(0, range.start);
+  const after = lines.slice(range.end);
+  const next = [...before, ...rebuilt, ...after].join(eol);
+  return next === text ? text : next;
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

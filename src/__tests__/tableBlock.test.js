@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import Papa from 'papaparse';
-import { parseGfmTable, tableToCsv } from '../components/TableBlock';
+import {
+  parseGfmTable,
+  tableToCsv,
+  replaceFirstGfmTable,
+} from '../components/TableBlock';
 
 // Sprint 3.2 — Track M.
 //
@@ -121,5 +125,82 @@ describe('tableToCsv', () => {
     const rows = [['Hello', 'one, two, three']];
     const csv = tableToCsv(headers, rows);
     expect(csv).toContain('"one, two, three"');
+  });
+});
+
+describe('replaceFirstGfmTable', () => {
+  it('replaces the first GFM table region in place and preserves preamble + postamble', () => {
+    const md = [
+      '# Heading',
+      '',
+      'Some intro paragraph.',
+      '',
+      '| Name | Age |',
+      '| ---- | --- |',
+      '| Alice | 30 |',
+      '| Bob   | 25 |',
+      '',
+      'Trailing prose.',
+    ].join('\n');
+    const next = replaceFirstGfmTable(md, {
+      headers: ['Name', 'Age'],
+      rows: [
+        ['Alice', '31'],
+        ['Bob', '25'],
+      ],
+    });
+    // Preamble unchanged, byte-for-byte.
+    expect(next.startsWith('# Heading\n\nSome intro paragraph.\n\n')).toBe(true);
+    // Postamble unchanged, byte-for-byte.
+    expect(next.endsWith('\n\nTrailing prose.')).toBe(true);
+    // Edited cell appears in the rebuilt table.
+    expect(next).toContain('| Alice | 31 |');
+    // The old value is gone.
+    expect(next).not.toContain('| Alice | 30 |');
+    // Round-tripping through the parser yields the new shape.
+    const reparsed = parseGfmTable(next);
+    expect(reparsed.headers).toEqual(['Name', 'Age']);
+    expect(reparsed.rows).toEqual([
+      ['Alice', '31'],
+      ['Bob', '25'],
+    ]);
+  });
+
+  it('returns the original text unchanged when no GFM table is detected', () => {
+    const md = '# Heading\n\nJust prose, no table here.\n';
+    const next = replaceFirstGfmTable(md, {
+      headers: ['A'],
+      rows: [['1']],
+    });
+    expect(next).toBe(md);
+  });
+
+  it('is idempotent: replacing with parsed values yields canonical, parser-stable output', () => {
+    const md = [
+      'Intro.',
+      '',
+      '| A | B |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+      '| 3 | 4 |',
+      '',
+      'Outro.',
+    ].join('\n');
+    const parsed = parseGfmTable(md);
+    const once = replaceFirstGfmTable(md, parsed);
+    // Second pass with the same payload must be a true byte-for-byte no-op
+    // (and the helper returns the same reference, not a fresh string).
+    const twice = replaceFirstGfmTable(once, parseGfmTable(once));
+    expect(twice).toBe(once);
+    // Postamble intact.
+    expect(once.endsWith('\n\nOutro.')).toBe(true);
+    // Preamble intact.
+    expect(once.startsWith('Intro.\n\n')).toBe(true);
+  });
+
+  it('returns the original text unchanged for non-string input', () => {
+    expect(replaceFirstGfmTable(null, { headers: [], rows: [] })).toBe(null);
+    expect(replaceFirstGfmTable(undefined, { headers: [], rows: [] })).toBe(undefined);
+    expect(replaceFirstGfmTable('', { headers: [], rows: [] })).toBe('');
   });
 });
