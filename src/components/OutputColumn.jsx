@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import RenderedDoc from './RenderedDoc';
 import SketchesPicker from './SketchesPicker';
 import SourceDoc from './SourceDoc';
@@ -91,6 +91,18 @@ function OutputColumn({
   onShowAllSketches,
 }) {
   const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'equation' | 'sketches'
+  // Reset mode to the default Preview whenever the active session changes.
+  // Without this, switching from a session in 'equation' or 'source' mode to
+  // a fresh/different session leaves the new session rendering through the
+  // wrong view (e.g. equation editor on a non-math session). The two existing
+  // mode-flip effects below handle sketch transitions; this one is the
+  // baseline reset. The setState lives in cleanup (so it fires when the
+  // *previous* session id is leaving) rather than the effect body — that
+  // keeps the react-hooks/set-state-in-effect lint happy and matches the
+  // pattern used by the PDF-page effects.
+  useEffect(() => {
+    return () => setMode('rendered');
+  }, [session?.id]);
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -100,17 +112,22 @@ function OutputColumn({
 
   const value = session?.svg || session?.text || '';
 
-  // Reuse the SourcePreview blob-URL pattern — allocate once per file, revoke
-  // on unmount/file-change. We only build a URL for image files; PDFs render
-  // a glyph card.
-  const thumbUrl = useMemo(() => {
-    if (!file?.type?.startsWith('image/')) return null;
-    return URL.createObjectURL(file);
-  }, [file]);
+  // Effect-driven blob URL — under React 19 StrictMode, useMemo factories
+  // run twice in dev and leak the first URL because there is no cleanup hook
+  // for the discarded value. Allocating in useEffect keeps it dev-mode-safe;
+  // setState is deferred via queueMicrotask to satisfy react-hooks/set-state-in-effect.
+  const [thumbUrl, setThumbUrl] = useState(null);
   useEffect(() => {
-    if (!thumbUrl) return undefined;
-    return () => URL.revokeObjectURL(thumbUrl);
-  }, [thumbUrl]);
+    if (!file?.type?.startsWith('image/')) return undefined;
+    const url = URL.createObjectURL(file);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setThumbUrl(url); });
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+      setThumbUrl(null);
+    };
+  }, [file]);
 
   const isPdf = file?.type === 'application/pdf';
   const thumbName = file?.name || session?.filename || '';

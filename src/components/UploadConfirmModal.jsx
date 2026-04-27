@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 function formatBytes(n) {
   if (n < 1024) return `${n} B`;
@@ -10,14 +10,24 @@ function UploadConfirmModal({ file, onConfirm, onCancel }) {
   const isImage = file?.type?.startsWith('image/');
   const isPdf = file?.type === 'application/pdf';
 
-  const previewUrl = useMemo(() => {
-    if (!isImage || !file) return null;
-    return URL.createObjectURL(file);
-  }, [file, isImage]);
+  // Allocate inside an effect so React 19 StrictMode's dev double-invocation
+  // doesn't leak the first URL. (`useMemo` factories run twice in dev; only
+  // the second URL would be revoked, the first leaks. Effects double-invoke
+  // too but their cleanup runs between, balancing alloc/revoke.) State is
+  // updated via microtask + cleanup so we never call setState synchronously
+  // within the effect body (forbidden by react-hooks/set-state-in-effect).
+  const [previewUrl, setPreviewUrl] = useState(null);
   useEffect(() => {
-    if (!previewUrl) return undefined;
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
+    if (!isImage || !file) return undefined;
+    const url = URL.createObjectURL(file);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setPreviewUrl(url); });
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+      setPreviewUrl(null);
+    };
+  }, [file, isImage]);
 
   // Render page 1 of the PDF as a thumbnail. Lazy-loads pdfjs-dist so the
   // dependency stays out of the main bundle. Cached in state for the modal's

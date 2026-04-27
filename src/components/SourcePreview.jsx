@@ -22,18 +22,26 @@ function PlaceholderLines({ seed }) {
 }
 
 function SourcePreview({ session, file, processing, onImageDims }) {
-  // Memoize the blob URL so re-renders don't realloc, then revoke on unmount or
-  // when `file` changes. StrictMode's dev double-mount still pairs alloc with
-  // a clean revoke because the unmount cleanup fires before the second mount's
-  // memo runs.
-  const imageUrl = useMemo(() => {
-    if (!file?.type?.startsWith('image/')) return null;
-    return URL.createObjectURL(file);
-  }, [file]);
+  // Allocate the blob URL inside an effect so the cleanup pairs reliably with
+  // the alloc — React 19 StrictMode's dev double-invocation runs `useMemo`
+  // factories twice and only revokes the *second* URL, leaking the first.
+  // Effects are double-invoked too, but their cleanup runs between the two
+  // invocations, so the alloc/revoke pair is balanced. State is updated via
+  // microtask + cleanup so we never call setState synchronously within the
+  // effect body (forbidden by react-hooks/set-state-in-effect — the same
+  // pattern the PDF-page effect below uses).
+  const [imageUrl, setImageUrl] = useState(null);
   useEffect(() => {
-    if (!imageUrl) return undefined;
-    return () => URL.revokeObjectURL(imageUrl);
-  }, [imageUrl]);
+    if (!file?.type?.startsWith('image/')) return undefined;
+    const url = URL.createObjectURL(file);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setImageUrl(url); });
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+      setImageUrl(null);
+    };
+  }, [file]);
 
   const isPdf = file?.type === 'application/pdf';
   const filename = file?.name || session?.filename || 'no document';

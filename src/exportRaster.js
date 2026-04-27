@@ -9,11 +9,16 @@
 // White-fill before draw is correct for both formats: PNG ignores the
 // fill under transparent pixels, JPG (no alpha) needs it to avoid a
 // black background on transparent regions.
+import { sanitizeSvg } from './svgSanitize';
 
 export function exportRaster(svgString, { format = 'png', filename, quality = 0.92, onError } = {}) {
   return new Promise((resolve) => {
     const div = document.createElement('div');
-    div.innerHTML = svgString;
+    // Defense-in-depth: sanitize before innerHTML even though most call
+    // sites already store a sanitized SVG. The raster helper takes raw
+    // strings from compile blocks, multi-sketch export, and ad-hoc paths
+    // so it must not trust its input.
+    div.innerHTML = sanitizeSvg(svgString);
     const svgEl = div.querySelector('svg');
     if (!svgEl) {
       onError && onError('EXP_SVG_BROWSER_LIMIT', 'No <svg> root found in this content.');
@@ -27,6 +32,8 @@ export function exportRaster(svgString, { format = 'png', filename, quality = 0.
     if (!svgEl.getAttribute('width')) svgEl.setAttribute('width', w);
     if (!svgEl.getAttribute('height')) svgEl.setAttribute('height', h);
 
+    // Only create the Blob URL after every early-return guard has passed,
+    // so we never leak an unrevoked URL on the no-svg-root path.
     const svgData = new XMLSerializer().serializeToString(svgEl);
     const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);

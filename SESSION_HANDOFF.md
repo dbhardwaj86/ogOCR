@@ -1,16 +1,47 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post Surface-Trim + Polish sprint: vectorize abort, vectorize UI gate, dropped Mermaid/Images/Refine, raw-image PNG/JPG export, 8 polish items)
-**Plan file (latest pass):** `C:\Users\abc\.claude\plans\open-a-plan-doc-radiant-raccoon.md` (Polish + Vectorize-Abort + Action Surface Trim)
+**Last updated:** 2026-04-27 (post Sketch → Image + Concurrent Vectorize + Save Picker Tightening sprint)
+**Plan file (latest pass):** no dedicated plan file — incremental follow-ups on top of the Surface-Trim sprint.
+**Plan file (Surface-Trim pass):** `C:\Users\abc\.claude\plans\open-a-plan-doc-radiant-raccoon.md` (Polish + Vectorize-Abort + Action Surface Trim, shipped commit `07cd434`)
 **Plan file (prior pass):** `C:\Users\abc\.claude\plans\where-is-the-functionality-zesty-glacier.md` (drove v4 + unified-Save in `9c99826`; §3.1/§3.3 closed in `9b907d0`)
 **Plan file (Multi-Sketch + Auto-Compile pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md`
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — Surface-Trim + Polish** first, then the prior passes, then the original plan if you need context.
+Read **Latest pass — Sketch → Image + Concurrent Vectorize + Save Picker Tightening** first, then the Surface-Trim section, then prior passes.
 
-## Latest pass — Surface-Trim + Polish sprint (2026-04-27)
+## Latest pass — Sketch → Image + Concurrent Vectorize + Save Picker Tightening (2026-04-27)
+
+**Why:** After the Surface-Trim sprint shipped, three follow-up items emerged:
+1. The dropped "Sketch → SVG" → user often just wants a raster (PNG) of the sketch, not editable vector. Re-introducing as a peer action lets PNG-first users skip the picker entirely.
+2. `vectorizeAbortRef` was a single `AbortController` — clicking two cards quickly while a batch was in flight silently abandoned one of the in-flight fetches. Concurrent vectorize support needs a per-sketch controller map.
+3. The Save picker's source-derived raster items (Original as PNG/JPG, All pages as PNG/JPG) overlapped conceptually with the new Sketch → Image action and the existing per-block SVG export; dropping them tightens the picker.
+
+**What shipped (uncommitted at the time of writing — this commit):**
+
+| Layer | Change | Files |
+|---|---|---|
+| Magic actions | New **`sketchImage`** action ("Sketch → Image", glyph `◭`, key `I`, group `Visual`, tier `overflow`) — uses `/api/sketch-to-svg` then auto-rasterizes the resulting SVG to PNG client-side via `exportRaster` after extraction lands. Single-sketch responses save 1 PNG; multi-sketch flows still go through the picker (per-card vectorize → Save → All as PNG via the existing pipeline). The session itself still keeps the SVG content for future re-export. | `src/magicActions.js`, `src/App.jsx` |
+| Vectorize concurrency | `vectorizeAbortRef` changed from single `AbortController` ref → `Map<sketchId, AbortController>`. Per-call set/get/delete; cancel paths walk the map. Concurrent vectorize calls (e.g. user clicking two cards quickly while a batch is mid-flight) no longer abandon each other's in-flight fetches. | `src/App.jsx` |
+| Save picker | `buildSessionFormats({ session, baseName })` simplified — dropped `file`, `pdfPageCount`, `onPageProgress` params and the source-derived raster items (Original as PNG/JPG, All pages as PNG/JPG). New per-compile-block SVG bulk raster surfaces in `buildCompileFormats`: when a compile has ≥1 SVG block, picker exposes **All SVGs as PNG (N) / JPG (N)**. ExportBar simplified — no more file-probe / pdf-page-count plumbing. | `src/saveFormats.js`, `src/components/ExportBar.jsx` |
+| Output / preview polish | Touch-up edits to `OutputColumn.jsx`, `SourcePreview.jsx`, `UploadConfirmModal.jsx`, `CompileBlockCard.jsx`, `CompileBuilder.jsx`, `exportRaster.js`, `svgSanitize.js` — small consistency tweaks following from the Save-picker refactor and concurrent-vectorize wiring. | (above) |
+| Docs | New top-level **`SECRETS_ROTATE_REMINDER.md`** — checklist for rotating `GEMINI_API_KEY`, `OPENAI_API_KEY` (orphan from a reverted experiment), `SMTP_USER`/`SMTP_PASS`, and Drive OAuth client secret + refresh token. Procedure: mint new → update `.env` → restart → revoke old. | `SECRETS_ROTATE_REMINDER.md` (NEW) |
+
+**Verification:**
+- `npm run lint` → exits 0.
+- `npm test` → **219/219 passing** across 26 files (test count unchanged from Surface-Trim — the Sketch → Image action is exercised through the existing runAction → magicActions wiring; per-sketch concurrent vectorize is covered by the prior batch-abort tests).
+- `npm run build` → clean.
+- `/api/_status` reports `gemini=real, docx=real`.
+
+**Manual smoke matrix (still owed by user on http://192.168.1.13:5181):**
+- A. Sketch → Image on a single-sketch upload → 1 PNG downloads after extraction lands; toast "Saved 1 PNG"; session also retains SVG.
+- B. Sketch → Image on a multi-sketch upload → picker opens (no auto-raster); user vectorizes some/all → Save → "All as PNG (N)" downloads everything.
+- C. Concurrent vectorize regression — start "Vectorize All", quickly click an individual card's Vectorize while the batch is mid-flight → both controllers stay live, both fetches resolve independently.
+- D. Save picker for a session with no SVG → picker shows only text/json/markdown options (no Original-PNG entry; user uses Sketch → Image action if they want a raster).
+- E. SECRETS_ROTATE_REMINDER.md is at the repo root, gitignored properly? — committed deliberately as a README-style checklist (no actual secrets in it).
+
+## Prior pass — Surface-Trim + Polish sprint (2026-04-27)
 
 **Why:** Three concrete asks the user surfaced after the v4 + unified-Save sprint, plus the eight highest-leverage UX/UI holes from a 4-subagent polish audit. The audit ran read-only across upload/onboarding, action/processing, output/export, and visual/theme; full findings live in the plan file.
 

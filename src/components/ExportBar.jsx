@@ -75,56 +75,19 @@ function ExportBar({ session, file, onShowToast, processing }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [pageProgress, setPageProgress] = useState(null);
-  const [pdfPageCount, setPdfPageCount] = useState(0);
   const containerRef = useRef(null);
   const buttonRef = useRef(null);
 
   const text = session?.text || '';
   const svg = session?.svg || '';
-  // Only "no content" if there is also no source file to derive a raster
-  // export from. With a file present, the picker offers Original-as-PNG /
-  // Original-as-JPG / page-export so Save is still useful pre-extraction.
-  const noContent = (!session || (!text && !svg)) && !file;
+  // Save targets only the session output (extracted text / generated SVG).
+  // Without either, there is nothing to save — independent of whether a
+  // source file is loaded.
+  const noContent = !session || (!text && !svg);
   const rawBase = (session?.exportName?.trim() || session?.filename || file?.name || 'ogOCR_Document');
   const baseName = rawBase.replace(/\.[^.]+$/, '');
 
-  // Lazily probe the PDF page count once per file so the Save picker can
-  // surface "All pages as PNG (N)" instead of an ambiguous label. pdfjs is
-  // already used by SourcePreview / UploadConfirmModal so the worker is
-  // typically already loaded. Only async writes go through setState — the
-  // "no PDF" reset uses a key (file identity) so a re-render after a swap
-  // shows the new count without a sync setState in the effect body.
-  useEffect(() => {
-    if (!file || file.type !== 'application/pdf') return undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const pdfjs = await import('pdfjs-dist');
-        const workerUrl = (await import('pdfjs-dist/build/pdf.worker.mjs?url')).default;
-        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-        const buf = await file.arrayBuffer();
-        if (cancelled) return;
-        const doc = await pdfjs.getDocument({ data: buf }).promise;
-        if (!cancelled) setPdfPageCount(doc.numPages);
-      } catch {
-        if (!cancelled) setPdfPageCount(0);
-      }
-    })();
-    return () => { cancelled = true; setPdfPageCount(0); };
-  }, [file]);
-
-  const handlePageProgress = ({ done, total }) => {
-    setPageProgress({ done, total });
-  };
-
-  const formats = buildSessionFormats({
-    session,
-    baseName,
-    file,
-    pdfPageCount,
-    onPageProgress: handlePageProgress,
-  });
+  const formats = buildSessionFormats({ session, baseName });
 
   useEffect(() => {
     if (!pickerOpen) return undefined;
@@ -150,7 +113,6 @@ function ExportBar({ session, file, onShowToast, processing }) {
   const runFormat = async (format) => {
     if (!format || running) return;
     setRunning(true);
-    setPageProgress(null);
     setPickerOpen(false);
     try {
       await format.run();
@@ -159,7 +121,6 @@ function ExportBar({ session, file, onShowToast, processing }) {
       showError(entry.code, { message: entry.message, hint: entry.hint });
     } finally {
       setRunning(false);
-      setPageProgress(null);
     }
   };
 
@@ -215,13 +176,7 @@ function ExportBar({ session, file, onShowToast, processing }) {
           data-testid="og-save-btn"
         >
           <span className="og-export-glyph" aria-hidden="true">{running ? '◐' : '↓'}</span>
-          <span>
-            {running
-              ? (pageProgress
-                  ? `Saving page ${pageProgress.done} of ${pageProgress.total}…`
-                  : 'Saving…')
-              : 'Save'}
-          </span>
+          <span>{running ? 'Saving…' : 'Save'}</span>
           <span className="og-export-menu-caret" aria-hidden="true">▾</span>
         </button>
         {pickerOpen && formats.length > 0 && (

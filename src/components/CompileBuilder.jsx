@@ -310,6 +310,7 @@ function CompileBuilder({
                         onDragEnd={() => { setDragId(null); setDropTargetId(null); }}
                         isDragging={dragId === b.id}
                         isDropTarget={dropTargetId === b.id && dragId && dragId !== b.id}
+                        compileBaseName={baseName}
                       />
                     </li>
                   ))}

@@ -19,9 +19,9 @@
 // All `run` calls are fire-and-forget — errors surface via the registry.
 
 import { buildSvgExports } from './svgExports';
-import { exportRaster, exportRasterAll, rasterFromImage, rasterPdfPages } from './exportRaster';
+import { exportRaster, exportRasterAll } from './exportRaster';
 import { exportDocx } from './exportDocx';
-import { compileToMarkdown, compileToHtml, hydrateCompileImages } from './compile';
+import { BLOCK_KINDS, compileToMarkdown, compileToHtml, hydrateCompileImages } from './compile';
 
 // True when the runtime can hand a File payload to the OS share sheet.
 // Some mobile browsers expose `navigator.share` without `canShare`; fall
@@ -75,55 +75,11 @@ export async function saveOrShare(blob, filename, mime) {
 
 // --- Per-session formats --------------------------------------------------
 
-export function buildSessionFormats({ session, baseName, file, pdfPageCount, onPageProgress }) {
+export function buildSessionFormats({ session, baseName }) {
   const items = [];
   const text = (session?.text || '').trim();
   const svg = (session?.svg || '').trim();
   const svgExports = session ? buildSvgExports(session, baseName) : [];
-
-  // Source-derived raster formats: always offered when an upload is present
-  // (independent of extraction). Replaces the dropped "Extract Images"
-  // action with a deterministic, client-side "save the original / each PDF
-  // page as PNG/JPG" surface.
-  if (file && file.type?.startsWith('image/')) {
-    items.push({
-      id: 'src-png',
-      label: 'Original as PNG',
-      glyph: '◯',
-      run: async () => rasterFromImage(file, { format: 'png', filename: baseName }),
-    });
-    items.push({
-      id: 'src-jpg',
-      label: 'Original as JPG',
-      glyph: '◯',
-      run: async () => rasterFromImage(file, { format: 'jpg', filename: baseName }),
-    });
-  } else if (file && file.type === 'application/pdf') {
-    const n = pdfPageCount || 0;
-    const labelSuffix = n > 1 ? ` (${n})` : '';
-    const allText = n > 1 ? 'All pages as PNG' : 'Page as PNG';
-    const allJpg = n > 1 ? 'All pages as JPG' : 'Page as JPG';
-    items.push({
-      id: 'pdf-png',
-      label: `${allText}${labelSuffix}`,
-      glyph: '◯',
-      run: async () => rasterPdfPages(file, {
-        format: 'png',
-        baseFilename: baseName,
-        onProgress: onPageProgress,
-      }),
-    });
-    items.push({
-      id: 'pdf-jpg',
-      label: `${allJpg}${labelSuffix}`,
-      glyph: '◯',
-      run: async () => rasterPdfPages(file, {
-        format: 'jpg',
-        baseFilename: baseName,
-        onProgress: onPageProgress,
-      }),
-    });
-  }
 
   if (!session) return items;
 
@@ -254,6 +210,32 @@ export function buildCompileFormats({ compile, sessions, baseName }) {
       return exportDocx({ markdown: md, filename: baseName + '.docx' });
     },
   });
+
+  // SVG-block raster export — when the compile contains ≥1 SVG block,
+  // surface batch raster save options. Filenames mirror the per-block save
+  // (compile-block-N.<ext>) so a single block's PNG and the bulk PNG land
+  // with predictable names.
+  const svgBlocks = (Array.isArray(compile.blocks) ? compile.blocks : [])
+    .map((b, idx) => ({ block: b, index: idx }))
+    .filter(({ block }) => block && block.kind === BLOCK_KINDS.SVG && (block.svg || '').trim());
+  if (svgBlocks.length >= 1) {
+    const svgExports = svgBlocks.map(({ block, index }) => ({
+      svg: block.svg,
+      filename: `${baseName}-block-${index + 1}`,
+    }));
+    items.push({
+      id: 'compile-svgs-png',
+      label: `All SVGs as PNG (${svgBlocks.length})`,
+      glyph: '▦',
+      run: async () => exportRasterAll(svgExports, 'png'),
+    });
+    items.push({
+      id: 'compile-svgs-jpg',
+      label: `All SVGs as JPG (${svgBlocks.length})`,
+      glyph: '▦',
+      run: async () => exportRasterAll(svgExports, 'jpg'),
+    });
+  }
 
   items.push({
     id: 'json',

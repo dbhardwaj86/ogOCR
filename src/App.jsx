@@ -38,6 +38,8 @@ import {
   dataURLToBlob,
 } from './storage/idb';
 import { enqueue as queueEnqueue, setRunner as setQueueRunner, updateProgress as updateQueueProgress } from './queue.js';
+import { buildSvgExports } from './svgExports';
+import { exportRaster, exportRasterAll } from './exportRaster';
 
 // --- Initial-state loaders run once at module load (Strict Mode safe). ---
 function readJSON(key, fallback) {
@@ -179,12 +181,13 @@ function App() {
   }, []);
 
   const abortRef = useRef(null);
-  // Vectorize batch state. `vectorizeAbortRef` holds the AbortController for
-  // the in-flight per-sketch fetch so Cancel can interrupt the current call.
-  // `batchAbortRef` is a flag the for-of loop checks between iterations to
-  // bail out of the queue without waiting for the current fetch's natural
-  // completion.
-  const vectorizeAbortRef = useRef(null);
+  // Vectorize batch state. `vectorizeAbortRef` is a Map<sketchId, AbortController>
+  // — concurrent vectorize calls (e.g. user clicking two cards quickly while
+  // a batch is mid-flight) need their own controllers so cancelling one doesn't
+  // silently abandon another's in-flight fetch. `batchAbortRef` is a flag the
+  // for-of loop checks between iterations to bail out of the queue without
+  // waiting for the current fetch's natural completion.
+  const vectorizeAbortRef = useRef(new Map());
   const batchAbortRef = useRef({ cancelled: false });
   const progressRef = useRef(null);
   const toastTimerRef = useRef(null);
@@ -708,9 +711,34 @@ function App() {
       const beforeSession = (activeSession && activeSession.id === sessionId)
         ? activeSession
         : { id: sessionId, filename: file?.name || 'Untitled', date: Date.now(), text: '', svg: '', kind: 'text' };
-      syncAutoCompileForSession({ ...beforeSession, ...updates });
+      const sessionAfter = { ...beforeSession, ...updates };
+      syncAutoCompileForSession(sessionAfter);
       const label = action?.label || 'Run';
       showInfo(`${label} complete`);
+
+      // Sketch → Image: rasterize the resulting SVG(s) to PNG immediately
+      // after extraction. Single-sketch responses (`data.svg`) rasterize one
+      // file; multi-sketch responses require per-sketch vectorize first, so
+      // the picker UI takes over and the user runs the existing per-session
+      // Save → All as PNG flow once vectorize completes. The session itself
+      // still ends up with the SVG content for future re-export.
+      if (actionId === 'sketchImage') {
+        try {
+          const rawBase = (sessionAfter.exportName?.trim() || sessionAfter.filename || file?.name || 'ogOCR_Document');
+          const exportBase = rawBase.replace(/\.[^.]+$/, '');
+          const svgExports = buildSvgExports(sessionAfter, exportBase);
+          if (svgExports.length === 1) {
+            await exportRaster(svgExports[0].svg, { format: 'png', filename: svgExports[0].filename });
+            showInfo('Saved 1 PNG');
+          } else if (svgExports.length >= 2) {
+            await exportRasterAll(svgExports, 'png');
+            showInfo(`Saved ${svgExports.length} PNGs`);
+          }
+        } catch (rasterErr) {
+          const entry = errFromException(rasterErr);
+          showError(entry.code, { message: entry.message, hint: entry.hint });
+        }
+      }
     } catch (err) {
       if (err.name === 'AbortError') return;
       console.error(err);
@@ -767,8 +795,10 @@ function App() {
     })));
 
     // Per-call AbortController so cancel can interrupt the in-flight fetch.
+    // Stored in the per-sketch map so concurrent vectorize calls don't
+    // overwrite each other's controllers.
     const controller = new AbortController();
-    vectorizeAbortRef.current = controller;
+    vectorizeAbortRef.current.set(sketchId, controller);
 
     let progressToken = null;
     if (!silent) {
@@ -832,7 +862,9 @@ function App() {
       const entry = err.__registryEntry || errFromException(err);
       showError(entry.code, { message: entry.message, hint: entry.hint });
     } finally {
-      if (vectorizeAbortRef.current === controller) vectorizeAbortRef.current = null;
+      if (vectorizeAbortRef.current.get(sketchId) === controller) {
+        vectorizeAbortRef.current.delete(sketchId);
+      }
       if (!silent && progressToken) finishProgress(progressToken);
     }
   }, [file, activeSessionId, sessions, processing, syncAutoCompileForSession, startVectorizing, finishProgress]);
@@ -896,13 +928,13 @@ function App() {
     }
   }, [sessions, activeSessionId, vectorizeSketch, processing, startVectorizing, setVectorizeStage, finishProgress]);
 
-  // User-initiated stop for the vectorize batch. Aborts the in-flight
-  // /api/sketch-to-svg fetch (so the current sketch doesn't finish silently)
-  // AND flips the loop flag so the next sketch won't dequeue.
+  // User-initiated stop for the vectorize batch. Aborts every in-flight
+  // /api/sketch-to-svg fetch (so any currently-running sketches don't finish
+  // silently) AND flips the loop flag so the next sketch won't dequeue.
   const cancelVectorizeBatch = useCallback(() => {
     batchAbortRef.current = { cancelled: true };
-    if (vectorizeAbortRef.current) {
-      try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+    for (const ctrl of vectorizeAbortRef.current.values()) {
+      try { ctrl.abort(); } catch { /* ignore */ }
     }
     showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: 'Resume any sketch via its Vectorize button.' });
   }, []);
@@ -1035,19 +1067,28 @@ function App() {
         updates.lastError = null;
         updateSession(sessionId, updates);
         // v3 — auto-append queue extraction result to the new session's
-        // worksheet. The session was just created via `createNewSession`
-        // above with empty fields, so we synthesize the post-update shape
-        // from those known defaults.
-        const sessionAfter = {
-          id: sessionId,
-          filename: queuedFile.name,
-          date: Date.now(),
-          text: '',
-          svg: '',
-          kind: 'text',
-          ...updates,
-        };
-        syncAutoCompileForSession(sessionAfter);
+        // worksheet. Read the post-update session from the freshest sessions
+        // snapshot so any concurrent edits (other queue items, manual edits)
+        // are reflected in what we sync against. Falls back to a synthesized
+        // skeleton if the session record can't be located (shouldn't happen
+        // since `createNewSession` ran above, but be defensive).
+        let sessionAfter = null;
+        setSessions(prev => {
+          const found = prev.find(s => s.id === sessionId);
+          sessionAfter = found
+            ? { ...found, ...updates }
+            : {
+                id: sessionId,
+                filename: queuedFile.name,
+                date: Date.now(),
+                text: '',
+                svg: '',
+                kind: 'text',
+                ...updates,
+              };
+          return prev;
+        });
+        if (sessionAfter) syncAutoCompileForSession(sessionAfter);
         updateQueueProgress(item.id, 1);
         return sessionId;
       } catch (err) {
@@ -1143,17 +1184,22 @@ function App() {
 
   const cancelRunning = useCallback(() => {
     // Vectorize batch and single vectorize go through their own abort
-    // surface so the per-sketch status can reset cleanly.
+    // surface so the per-sketch status can reset cleanly. Abort every entry
+    // in the per-sketch controller map so concurrent vectorizes are all
+    // interrupted (the map may contain >1 entry if a single Vectorize click
+    // landed while the batch loop is already mid-flight).
     if (processing?.actionId === 'sketch-batch') {
       batchAbortRef.current = { cancelled: true };
-      if (vectorizeAbortRef.current) {
-        try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+      for (const ctrl of vectorizeAbortRef.current.values()) {
+        try { ctrl.abort(); } catch { /* ignore */ }
       }
       showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: 'Resume any sketch via its Vectorize button.' });
       return;
     }
-    if (processing?.actionId === 'sketch' && vectorizeAbortRef.current) {
-      try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+    if (processing?.actionId === 'sketch' && vectorizeAbortRef.current.size > 0) {
+      for (const ctrl of vectorizeAbortRef.current.values()) {
+        try { ctrl.abort(); } catch { /* ignore */ }
+      }
       showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: null });
       return;
     }

@@ -64,6 +64,13 @@ export const MAGIC_ACTIONS = [
     endpoint: '/api/sketch-to-svg',
     prompt: null,
   },
+  {
+    id: 'sketchImage', group: 'Visual', label: 'Sketch → Image',
+    hint: 'Sketch → PNG',
+    glyph: '◭', key: 'I', tier: 'overflow',
+    endpoint: '/api/sketch-to-svg',
+    prompt: null,
+  },
 ];
 
 export const ACTION_GROUPS = ['Text', 'Structure', 'Symbol', 'Visual'];
@@ -75,6 +82,7 @@ export const KIND_LABEL = {
   actions: 'Action items',
   math: 'LaTeX',
   sketch: 'SVG',
+  sketchImage: 'Sketch image',
 };
 
 export const KIND_GLYPH = {
@@ -84,6 +92,7 @@ export const KIND_GLYPH = {
   actions: '✓',
   math: '∑',
   sketch: '✎',
+  sketchImage: '◭',
 };
 
 export function relTime(d) {

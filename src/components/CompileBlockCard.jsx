@@ -1,10 +1,14 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { BLOCK_KINDS, resolveSessionBlock } from '../compile';
 import { sanitizeSvg } from '../svgSanitize';
+import { saveOrShare } from '../saveFormats';
+import { exportRaster } from '../exportRaster';
+import { showError } from '../errors/showError';
+import { errFromException } from '../errors/errFromResponse';
 
 const KIND_GLYPH = {
   [BLOCK_KINDS.TEXT]: '¶',
@@ -122,12 +126,36 @@ function CompileBlockCard({
   onDragEnd,
   isDragging,
   isDropTarget,
+  compileBaseName,
 }) {
   const cardRef = useRef(null);
+  const [savingFmt, setSavingFmt] = useState(null);
   const safeSvg = useMemo(
     () => (block.kind === BLOCK_KINDS.SVG ? sanitizeSvg(block.svg || '') : ''),
     [block.kind, block.svg]
   );
+
+  const blockBaseName = `${compileBaseName || 'compile'}-block-${index + 1}`;
+  const handleSaveSvgBlock = async (format) => {
+    if (!block.svg || !block.svg.trim() || savingFmt) return;
+    setSavingFmt(format);
+    try {
+      if (format === 'svg') {
+        await saveOrShare(
+          new Blob([block.svg], { type: 'image/svg+xml' }),
+          blockBaseName + '.svg',
+          'image/svg+xml',
+        );
+      } else {
+        await exportRaster(block.svg, { format, filename: blockBaseName });
+      }
+    } catch (err) {
+      const entry = errFromException(err);
+      showError(entry.code, { message: entry.message, hint: entry.hint });
+    } finally {
+      setSavingFmt(null);
+    }
+  };
 
   const renderBody = () => {
     switch (block.kind) {
@@ -141,7 +169,8 @@ function CompileBlockCard({
             spellCheck={false}
           />
         );
-      case BLOCK_KINDS.SVG:
+      case BLOCK_KINDS.SVG: {
+        const hasSvg = !!(block.svg && block.svg.trim());
         return (
           <div className="og-compile-block-svg-wrap">
             {safeSvg ? (
@@ -149,6 +178,29 @@ function CompileBlockCard({
             ) : (
               <div className="og-compile-block-empty">No SVG markup yet.</div>
             )}
+            <div className="og-compile-block-svg-actions">
+              <button
+                type="button"
+                className="og-compile-block-btn"
+                onClick={() => handleSaveSvgBlock('svg')}
+                disabled={!hasSvg || !!savingFmt}
+                title="Save this block as an SVG file"
+              >{savingFmt === 'svg' ? 'Saving…' : 'SVG'}</button>
+              <button
+                type="button"
+                className="og-compile-block-btn"
+                onClick={() => handleSaveSvgBlock('png')}
+                disabled={!hasSvg || !!savingFmt}
+                title="Save this block as a PNG"
+              >{savingFmt === 'png' ? 'Saving…' : 'PNG'}</button>
+              <button
+                type="button"
+                className="og-compile-block-btn"
+                onClick={() => handleSaveSvgBlock('jpg')}
+                disabled={!hasSvg || !!savingFmt}
+                title="Save this block as a JPG"
+              >{savingFmt === 'jpg' ? 'Saving…' : 'JPG'}</button>
+            </div>
             <textarea
               className="og-compile-block-svg-source"
               value={block.svg || ''}
@@ -158,6 +210,7 @@ function CompileBlockCard({
             />
           </div>
         );
+      }
       case BLOCK_KINDS.IMAGE:
         return (
           <div className="og-compile-block-image">
