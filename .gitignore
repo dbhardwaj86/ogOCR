@@ -27,3 +27,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Sample inputs / dev clutter at repo root (not source)
+/Application of Derivatives.pdf
+/dev-server.log

@@ -25,4 +25,12 @@ export default defineConfig([
       globals: globals.node,
     },
   },
+  {
+    files: ['src/__tests__/**/*.{js,jsx}'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
 ])

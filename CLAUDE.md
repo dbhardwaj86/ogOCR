@@ -1,8 +1,18 @@
 # CLAUDE.md
 
-> **🔁 Resuming the active 3-sprint plan? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first.**
+> **🔁 Resuming work? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first** — start with the **Latest pass — Ship Cleanup Sprint (2026-04-27)** section at the top.
 >
-> That file holds the live status of the in-progress audit-implementation pass (sprints S1/S2/S3 from `~/.claude/plans/we-will-work-on-fuzzy-teacup.md`), what shipped, what's pending, and exactly where to pick up. The architecture notes below remain accurate, but anything about active work belongs in the handoff.
+> That file is the living index of every multi-step pass: what shipped, what's pending, what to verify next. The architecture notes below stay accurate, but anything about active or recently-shipped work belongs in the handoff.
+
+## Latest changes (2026-04-27 Ship Cleanup Sprint)
+
+These differ from the architecture notes below; if there's a conflict, this section wins:
+
+- **`npm start`** now serves the built `dist/` + the API on a single port — production hosting path. `npm run dev` still does the dual Vite + Express dance for local development.
+- **PDFs route through Gemini Files API.** `server/geminiUpload.js` exposes `buildGeminiUploadParts(file, { fileManager })` — PDFs upload once, get a `fileUri`, are cleaned up after generateContent. Images still go inline base64. The `generateContentFromUpload(model, prompt, file)` helper in `server/index.js` is the single entry point.
+- **`xlsx` was replaced by `exceljs`** in `src/components/TableBlock.jsx` (still lazy-imported on the export click).
+- **EADDRINUSE now fails loud** — `server.on('error', ...)` exits code 1 with a clear message instead of the silent-exit-while-Vite-stays-up bug documented in the Gotchas section.
+- **Test runner exists** — Vitest. `npm test` is the canonical command. Architecture note below saying "There is no test runner" is wrong; ignore it (the suite is at 170 passing across 25 files).
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 

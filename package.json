@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"vite\" \"node server/index.js\"",
+    "start": "node server/index.js",
     "build": "vite build",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"server/**/*.js\" \"scripts/**/*.js\"",
@@ -38,8 +39,8 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "sharp": "^0.34.5",
-    "xlsx": "^0.18.5"
+    "exceljs": "^4.4.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

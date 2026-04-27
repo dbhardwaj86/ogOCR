@@ -214,15 +214,16 @@ function TableBlock({ headers: headersIn, rows: rowsIn, onChange, filename }) {
   };
 
   const exportXlsx = async () => {
-    // Lazy-load xlsx only on the click path so the heavy parser stays out of
+    // Lazy-load exceljs only on the click path so the heavy writer stays out of
     // the main bundle. Vite splits the dynamic import into its own chunk.
-    const XLSX = await import('xlsx');
-    const aoa = [headers, ...rows];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([wbout], {
+    const mod = await import('exceljs');
+    const Workbook = mod.Workbook || mod.default?.Workbook;
+    const workbook = new Workbook();
+    const sheet = workbook.addWorksheet('Sheet1');
+    sheet.addRow(headers);
+    rows.forEach((row) => sheet.addRow(row));
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     downloadBlob(blob, `${baseName}.xlsx`);

@@ -7,7 +7,7 @@
  * - localStorage circuit-breaker shape
  */
 import React from 'react';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { sanitizeSvg } from '../../svgSanitize.js';
 import WorksheetBuilder from '../../components/WorksheetBuilder.jsx';

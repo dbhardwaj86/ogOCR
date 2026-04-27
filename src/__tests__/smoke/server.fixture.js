@@ -10,7 +10,6 @@
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
-import { Readable as _Readable } from 'node:stream';
 import { sendError } from '../../../server/sendError.js';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;

@@ -1,11 +1,45 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post-Run-2 review fixes)
-**Plan file:** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
+**Last updated:** 2026-04-27 (post Ship Cleanup Sprint)
+**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md`
+**Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
-**Latest review pass:** `C:\Users\abc\.claude\plans\brainstorm-and-analyze-this-warm-fiddle.md` (Run 2, Findings A/B/C/D)
+**Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-This is the live status of the 3-sprint implementation pass landing the [REVIEW_REPORT.md](REVIEW_REPORT.md) recommendations (key rotation excluded). Read this first when resuming. Then check the plan file for full sprint scope.
+Read **Latest pass — Ship Cleanup Sprint** first, then the **Pending user review** section, then the original plan if you need context.
+
+## Latest pass — Ship Cleanup Sprint (2026-04-27)
+
+**Why:** A four-codebase bake-off (ogOCR vs codex-OCR vs khanak-claude-OCR vs gemini-OCR) picked ogOCR as the codebase to invest in. This sprint closed the four gaps that stopped it from being ship-ready, then the three sibling codebases were retired. See `..\_review_reports\COMPARISON.md` for the full bake-off and `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` for the gap-closure plan.
+
+**What shipped (single commit, all green):**
+
+| Group | Change | Files touched |
+|---|---|---|
+| 1 | Lint to green — added Node-globals block for `src/__tests__/**`; dropped unused `beforeEach` import; dropped unused `_Readable` import; `eslint-disable no-control-regex` on the legitimate `\x00` test | `eslint.config.js`, `src/__tests__/smoke/{client-output.test.jsx,server.fixture.js,mocks-and-share.test.js}` |
+| 2 | Replaced `xlsx@0.18.5` (HIGH-severity vuln, write-only usage) with `exceljs@^4.4.0`; dynamic import preserved so it stays out of the main bundle | `package.json`, `src/components/TableBlock.jsx` |
+| 3 | Production hosting: `npm start` script; `express.static(dist)` + SPA fallback regex (excludes `/api`); EADDRINUSE handler that exits non-zero with a clear message (kills the silent-exit bug documented in CLAUDE.md gotchas) | `server/index.js`, `package.json` |
+| 4 | Gemini Files API for PDFs: new `server/geminiUpload.js` (4 exports, 107 LOC); `GoogleAIFileManager` instance; `generateContentFromUpload` helper that branches on mimetype; wired into `/api/extract`, `/api/sketch-to-svg`, `/api/extract-images`. Images stay inline base64 (cheaper); PDFs upload once, get a `fileUri`, get cleaned up in `finally` | `server/geminiUpload.js` (new), `server/index.js` |
+| 5 | `.gitignore` — added `Application of Derivatives.pdf` (8.3 MB sample), `dev-server.log` | `.gitignore` |
+| — | New Vitest test file ported from codex-OCR's `node:test` suite, plus two extra cases (no-fileManager error, polling timeout) | `src/__tests__/smoke/geminiUpload.test.js` (new) |
+
+**Verification (all green):**
+- `npm run lint` → exits 0 (was 8 errors)
+- `npm test` → **170/170 passing** across 25 files (was 163/163; +7 new geminiUpload tests)
+- `npm run build` → succeeds; entry chunk 539 KB; `exceljs` lazy-chunked at 930 KB; standard >500 KB warning
+- `npm audit --audit-level=high` → no HIGH findings (was 1 HIGH `xlsx`); 6 moderate remain (uuid<14 chain via gaxios/googleapis-common/mermaid — semver-major bump deferred)
+- `npm start` → boots, serves API + dist UI on a single port; `/api/_status` returns 200
+
+**Manual smoke still owed:** upload a small image + small PDF + 9 MiB PDF through the running app and confirm extract/sketch-to-svg/extract-images all work via the new Files API path. Check the EADDRINUSE handler by trying to start a second instance on the same port.
+
+## Resume protocol
+
+1. Read this file (`SESSION_HANDOFF.md`) — start with the **Latest pass** section above.
+2. Read [REVIEW_REPORT.md](REVIEW_REPORT.md) for the original audit context.
+3. Read `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md` for the 3-sprint scope.
+4. Run `npm run lint && npm test && npm run build` to confirm baseline before changing anything.
+
+This is the live status of the 3-sprint implementation pass landing the [REVIEW_REPORT.md](REVIEW_REPORT.md) recommendations (key rotation excluded). Then check the plan file for full sprint scope.
 
 ## Resume protocol
 

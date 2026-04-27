@@ -6,16 +6,24 @@ import helmet from 'helmet';
 import hpp from 'hpp';
 import rateLimit from 'express-rate-limit';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAIFileManager } from '@google/generative-ai/server';
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import sharp from 'sharp';
 import os from 'os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { sendError, codeFromException } from './sendError.js';
+import { buildGeminiUploadParts, cleanupGeminiUpload } from './geminiUpload.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DIST_DIR = path.join(__dirname, '..', 'dist');
+const DIST_INDEX = path.join(DIST_DIR, 'index.html');
 
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 
@@ -184,6 +192,24 @@ function pickUploadedFile(req) {
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Files API client for PDFs — large multi-page docs upload once, get a fileUri,
+// then generateContent references it. Images stay inline base64 (cheaper hop).
+const fileManager = process.env.GEMINI_API_KEY
+  ? new GoogleAIFileManager(process.env.GEMINI_API_KEY)
+  : null;
+
+// Wraps Gemini generateContent with the upload-strategy split: PDFs go via the
+// Files API (uploaded once, referenced by URI, deleted after), images stay
+// inline base64. Cleanup runs in a finally so a model error doesn't strand
+// uploaded files on Gemini's side.
+async function generateContentFromUpload(model, prompt, file) {
+  const { parts, uploadedFileName } = await buildGeminiUploadParts(file, { fileManager });
+  try {
+    return await withTimeout(model.generateContent([prompt, ...parts]));
+  } finally {
+    await cleanupGeminiUpload(fileManager, uploadedFileName);
+  }
+}
 
 // Drive integration: optional. All three vars must be set; populate
 // GOOGLE_REFRESH_TOKEN by running `npm run bootstrap-drive` once.
@@ -379,10 +405,9 @@ app.post('/api/extract', ocrLimiter, uploadSemaphore, uploadArray.any(), async (
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const imageParts = [{ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }];
     const userPrompt = prompt || "Extract the text from this image perfectly, maintaining formatting.";
 
-    const result = await withTimeout(model.generateContent([userPrompt, ...imageParts]));
+    const result = await generateContentFromUpload(model, userPrompt, file);
     const text = (await result.response).text();
 
     res.json({ text });
@@ -528,14 +553,13 @@ app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.any(), a
     }
 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
-    const imageParts = [{ inlineData: { data: file.buffer.toString("base64"), mimeType: file.mimetype } }];
 
     const prompt = `You are an expert graphic designer and educator. Examine all pages of the provided document. Find the sketched teaching diagram (no matter which page it is on) and convert it into a clean, professional, black-and-white textbook-style vector graphic.
     Return ONLY valid raw SVG code.
     Do NOT wrap it in markdown code blocks like \`\`\`svg.
     Do NOT include any explanations or HTML outside the <svg> tag.`;
 
-    const result = await withTimeout(model.generateContent([prompt, ...imageParts]));
+    const result = await generateContentFromUpload(model, prompt, file);
     let svgText = (await result.response).text();
     svgText = svgText.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
 
@@ -560,15 +584,12 @@ app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.any(), 
       generationConfig: { responseMimeType: "application/json" }
     });
 
-    const base64Data = file.buffer.toString("base64");
-    const imageParts = [{ inlineData: { data: base64Data, mimeType: file.mimetype } }];
-
     const prompt = `Identify all distinct diagrams, charts, pictures, or major visual components in this document.
     Return a JSON array of objects. Each object must have:
     - "description": A short description of the image.
     - "boundingBox": An array of 4 numbers [ymin, xmin, ymax, xmax] representing the normalized bounding box coordinates where values are between 0 and 1000.`;
 
-    const result = await withTimeout(model.generateContent([prompt, ...imageParts]));
+    const result = await generateContentFromUpload(model, prompt, file);
     let jsonText = (await result.response).text();
     jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
 
@@ -726,6 +747,17 @@ app.get('/api/_status', (_req, res) => {
   });
 });
 
+// Production hosting: serve the Vite-built bundle so `npm start` runs the
+// full app on a single port. In dev (`npm run dev`) Vite owns the frontend,
+// so the dist/ folder may be stale or absent — that's fine, this branch
+// only kicks in for paths express didn't already match.
+app.use(express.static(DIST_DIR));
+app.get(/^(?!\/api(?:\/|$)).*/, (_req, res, next) => {
+  res.sendFile(DIST_INDEX, (error) => {
+    if (error) next(error);
+  });
+});
+
 // Multer / unhandled error middleware (must be last)
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
@@ -754,10 +786,23 @@ function getLanUrls(p) {
 
 // Bind 0.0.0.0 so the API is reachable from other devices on the LAN
 // (the user reviews from a phone). CORS above gates non-LAN origins.
-app.listen(port, '0.0.0.0', () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log('ogOCR API listening:');
   console.log(`  Local:    http://localhost:${port}`);
   for (const url of getLanUrls(port)) {
     console.log(`  Network:  ${url}`);
   }
+});
+
+// Surface EADDRINUSE loudly. On Windows, leftover node.exe children from a
+// previous `npm run dev` hold the port and the next boot would otherwise
+// silently exit code 0 while concurrently kept Vite alive — every /api/*
+// fetch then hangs forever. Exit non-zero so the user sees the failure.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use. Stop the other process (Windows: \`taskkill //F //IM node.exe\`) and try again.`);
+  } else {
+    console.error('Failed to start ogOCR API:', err.message);
+  }
+  process.exit(1);
 });
