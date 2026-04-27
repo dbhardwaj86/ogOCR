@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **🔁 Resuming work? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first** — start with the **Latest pass — Ship Cleanup Sprint (2026-04-27)** section at the top.
+> **🔁 Resuming work? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first** — start with the **Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open (2026-04-27, commit `d441f40`)** section at the top.
 >
 > That file is the living index of every multi-step pass: what shipped, what's pending, what to verify next. The architecture notes below stay accurate, but anything about active or recently-shipped work belongs in the handoff.
 
@@ -32,7 +32,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run lint` — ESLint. The config has separate rule blocks for browser code (`src/**`) and Node code (`server/**`, `scripts/**`); if you add a new top-level directory, mirror the pattern.
 - `node scripts/list-models.js` — sanity script that lists available Gemini models for the configured `GEMINI_API_KEY`. Useful when extraction starts returning 404s.
 
-There is no test runner. There is no TypeScript.
+- `npm test` — Vitest. The canonical test command. Suite is at **204 passing** across 26 files as of 2026-04-27.
+
+There is no TypeScript.
 
 ## Architecture
 
@@ -86,7 +88,9 @@ Do **not** use `gemini-1.5-pro` — it 404s in this workspace. The Gemini timeou
 
 ### Frontend state model
 All persistent client state lives in four localStorage keys, written (debounced 400ms) from `App.jsx`:
-- `ogOCR_sessions` — array of `{id, filename, date, text, svg, kind}`. `kind` indexes into `KIND_GLYPH` / `KIND_LABEL` in `src/magicActions.js`; legacy sessions without `kind` are treated as `'text'` on render.
+- `ogOCR_sessions` — array of `{id, filename, date, text, svg, kind, images?, refinements?, sketches?, selectedSketchId?, languageOverride?, exportName?}` (schema v5). `kind` indexes into `KIND_GLYPH` / `KIND_LABEL` in `src/magicActions.js`; legacy sessions without `kind` are treated as `'text'` on render. Image bytes (`images[i].data`) live in IndexedDB — only `{id, desc}` round-trips through localStorage; hydration runs lazily on session activate.
+- `ogOCR_compiles` — array of compiles (schema v3). Each compile has `{id, name, createdAt, updatedAt, blocks, pageSize, theme, header, footer, sourceId, version}`. `sourceId === null` is a manual cross-source compile; a session id binds the compile to that source for auto-sync. Each block has `{id, kind, role, ...content}` where `role ∈ {'manual', 'auto:text', 'auto:svg:main', 'auto:svg:sketch-<id>', 'auto:image:<imgId>', 'auto:refinement:<kind>'}`. See `src/compile.js#syncAutoBlocks` for the reconciliation rules; manual blocks and user drag-reorders are never touched.
+- `ogOCR_active_compile` — id of the currently-open compile.
 - `ogOCR_active_session` — id of the currently viewed session, removed (not just emptied) when no session is active.
 - `ogOCR_prompt` — the custom prompt textarea content.
 - `ogOCR_theme` — `'paper'` | `'sepia'` | `'ink'`. Applied synchronously in `index.html` before React mounts to avoid a first-paint flash.
@@ -96,8 +100,8 @@ A new session is auto-created on every upload (filename + `kind: 'text'`). The p
 ### Output rendering (`OutputColumn.jsx`)
 - **Rendered** mode (default): SVG (DOMPurify-sanitized with explicit SVG profile + `FORBID_TAGS`/`FORBID_ATTR` for `foreignObject`/`script`/`iframe`/`onerror`/`onload`/`onclick`) renders above markdown. Markdown goes through `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex` (configured with `throwOnError: false` so malformed LaTeX doesn't crash the preview). Block-level elements are mapped to `og-h1`/`og-h2`/`og-h3`/`og-p`/`og-ul`/`og-ol`/`og-bq`/`og-table`/`og-code-inline` via the `components` prop.
 - **Source** mode: editable `<textarea>` bound to whichever of `text` / `svg` is non-empty on the active session. Edits persist via the debounced setSessions path.
-- **Compile** mode: opens a full-screen modal with `WorksheetBuilder.jsx` rendering all sessions as a printable stack. The print stylesheet has separate rules for compile-modal-open vs. closed; the un-modal path prints just the canvas.
-- `ExportBar.jsx` provides nine actions in three groups (Save: Drive/MD/PDF; Share: Email/Classroom/Link; Export: Copy/PNG/JSON). Email opens an inline modal; PNG export reads `viewBox.baseVal` before falling back to declared `width`/`height` to avoid the 800×600 force-resize bug.
+- **Worksheet** button (the "Compile" pill, renamed in copy): opens a full-screen modal with `CompileBuilder.jsx` (NOT the legacy `WorksheetBuilder.jsx`, which is now unused) showing the active session's auto-compile by default — created lazily on first extraction by `App.jsx#syncAutoCompileForSession`. Manual cross-source compiles still work alongside auto ones via the palette's "+ New" affordance. The print stylesheet has separate rules for compile-modal-open vs. closed; the un-modal path prints just the canvas.
+- `ExportBar.jsx` provides three groups (Save: Drive/MD/DOCX/PDF/Sign; Share: Email/Classroom/Link; Export: Copy / raster / JSON). The raster items are state-driven: `0` SVGs → none; `1` SVG → **PNG** + **JPG** (one file each); `2+` SVGs → **All as PNG (N)** + **All as JPG (N)** (sequential downloads, one file per SVG, no compositing). The dedup logic lives in `src/svgExports.js#buildSvgExports` — main SVG and a focused-sketch SVG are deduplicated when their bytes match. PNG export reads `viewBox.baseVal` before falling back to declared `width`/`height` to avoid the 800×600 force-resize bug.
 
 ## Environment
 

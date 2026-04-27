@@ -2,6 +2,18 @@
 
 A "where we left off" doc for the next person (or AI) picking up the project. CLAUDE.md is the day-to-day reference for working with the codebase; this file captures session history, decisions, and the tribal context that doesn't live in code.
 
+## Status check (2026-04-27 — post auto-compile sprint, commit `d441f40`)
+
+Three connected sprints landed today on top of the Multi-Sketch Detection work:
+
+1. **Per-source auto-compiled worksheets.** Compile schema bumped to v3. Every compile now has a `sourceId` and every block has a `role` (`manual` or `auto:*`). `src/compile.js#syncAutoBlocks` reconciles auto blocks from a session snapshot on every extraction completion — the Worksheet button on a source opens *that source's* auto-compile (created lazily) with text + every vectorized sketch + images + each refinement appended automatically. Manual cross-source compiles still work; the palette splits them into "By source" (auto badge) and "Manual." Cascade-delete keeps the auto-compile in lockstep with its session.
+2. **Multi-SVG raster export — PNG + JPG, one file per SVG.** `exportPNG` is now `exportRaster(svg, { format, filename, quality })` in `src/components/ExportBar.jsx`. New `src/svgExports.js` deduplicates the main SVG against any focused-sketch SVG. Multi-SVG state shows **All as PNG (N)** / **All as JPG (N)** — sequential downloads with a 60ms breather to dodge Chromium dedup. No mosaic, each SVG at its own viewBox dimensions.
+3. **Non-destructive sketch open.** `openSketch` no longer wipes `session.sketches[]`; the multi-sketch picker survives. New "← Show all sketches (N)" link in the focused-view header returns the user to the picker with every vectorized SVG intact. `vectorizeSketch` now reads its post-update session via the `setSessions(prev => …)` updater so `vectorizeAllSketches`'s sequential loop syncs the auto-compile against the freshest cumulative state — the bug where only the latest sketch survived is fixed and regression-tested.
+
+`npm run lint` clean. `npm test` → **204/204 passing** across 26 files (was 182/170; +21 net new tests covering v3 sync, multi-SVG preservation, drag-reorder survival, sequential-vectorize regression, raster dedup). Pushed to `origin/main` and fast-forwarded `origin/ship-cleanup-sprint` to the same SHA so any clone gets the latest code regardless of which branch is the GitHub default.
+
+Detailed sprint breakdown lives in [SESSION_HANDOFF.md](SESSION_HANDOFF.md) under "Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open." Plan file: `~/.claude/plans/user-should-be-able-swift-falcon.md`.
+
 ## Status check (2026-04-26)
 
 **Working end-to-end on:** laptop (localhost), iPad (LAN URL via Safari), Android phone (LAN URL via Chrome). All three confirmed by hitting `/api/extract` and seeing 200 responses in the live dev logs.
