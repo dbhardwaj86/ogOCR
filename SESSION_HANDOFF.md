@@ -1,14 +1,47 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post Auto-Compile + Multi-SVG Export sprint)
+**Last updated:** 2026-04-27 (post v4 worksheet schema + unified Save picker)
 **Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` (originally Multi-Sketch Detection; the Auto-Compile sprint extended it without a separate plan file)
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open** first, then the prior passes, then the original plan if you need context.
+Read **Latest pass — v4 worksheet schema + unified Save picker** first, then the prior passes, then the original plan if you need context.
 
-## Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open (2026-04-27)
+## Latest pass — v4 worksheet schema + unified Save picker (2026-04-27)
+
+**Why:** Three pain points the v3 auto-compile UX surfaced:
+1. Re-running a *different* magic action (e.g. Math-to-LaTeX after Text Extract) overwrote the prior action's result in the worksheet — only the most-recent action kept its block, because v3 auto blocks were keyed by kind (`auto:text`, `auto:svg:main`) not by the action that produced them.
+2. The 3-dropdown ExportBar (Save / Share / Export) was visually heavy for a flow where Drive / Email / Classroom are mocks and most users either hit Save on desktop or Share on mobile.
+3. Track N (signature insert) needed `onUpdateSession` from SourceColumn but was working around it with a localStorage round-trip + page reload — source pane only updated after refresh.
+
+**What shipped (commit `9c99826`):**
+
+| Layer | Change | Files |
+|---|---|---|
+| Compile schema | Bumped **v3 → v4**. Auto block roles now action-keyed: `auto:text:<actionId>` / `auto:svg:<actionId>` (replaces v3's `auto:text` and `auto:svg:main`). New `session.outputs` map populated by `runAction` and consumed by `syncAutoBlocks`. Re-running the **same** action replaces its block in place; running a **different** action accumulates a new block alongside the prior one. | `src/compile.js`, `src/App.jsx` |
+| Migration | Legacy `auto:text` and `auto:svg:main` blocks demote to `role: 'manual'` so existing v3 compiles keep their content as historical snapshots; new auto blocks land alongside on the next sync. | `src/compile.js#migrateCompile` |
+| Unified Save picker | New `src/saveFormats.js` builds a format menu shared by per-session ExportBar and CompileBuilder. `saveOrShare()` uses `navigator.share()` with a File payload when available; falls back to download. The 3 ExportBar dropdowns collapsed into a single Save button. Drive/Email/Classroom buttons removed (those routes are still server-mocked but no longer surface in the UI). | `src/saveFormats.js` (NEW), `src/components/ExportBar.jsx`, `src/components/CompileBuilder.jsx` |
+| Raster pipeline extracted | SVG → PNG/JPG raster code lifted out of ExportBar into `src/exportRaster.js` so the picker, compile builder, and any future surface can reuse it. | `src/exportRaster.js` (NEW), `src/components/ExportBar.jsx` |
+| MockBadge | Filters to `docx` only — Drive/Email/Classroom buttons no longer exist, so their mock pills aren't useful in the top bar. | `src/components/MockBadge.jsx` |
+| Track N source-pane carryover | `SourceColumn` now receives `onUpdateSession` directly from App; signature insert is a single state update, no more localStorage round-trip + page reload. | `src/App.jsx`, `src/components/SourceColumn.jsx` |
+| Sketch picker UX | Focused-view back chip restyled (border + accent-soft fill) and shows pending-vectorize count. `OutputColumn` auto-flips mode to `'rendered'` when `openSketch` promotes a sketch (so the Open click is no longer a no-op when the picker had been visible). | `src/components/OutputColumn.jsx`, `src/index.css` |
+| Tests | New `saveFormats.test.js` (8 cases) + revamped `exportBar.test.js` + 12 new `compile.test.js` cases (v4 action-keyed sync, v3→v4 migration demote, action accumulation). 204 → **216** passing. | `src/__tests__/saveFormats.test.js` (NEW), `src/__tests__/exportBar.test.js`, `src/__tests__/compile.test.js` |
+
+**Verification:**
+- `npm run lint` → exits 0.
+- `npm test` → **216/216 passing** (was 204/204; +12 net new across compile + saveFormats + exportBar suites).
+- `npm run build` → clean.
+
+**Manual smoke matrix:**
+- A. **Per-action accumulation** — extract Text → open Worksheet → auto-compile shows ONE text block. Run Math-to-LaTeX on the same source → Worksheet now shows BOTH the text block AND the math block (different `actionId`s, both auto, neither overwrites). Re-run Text → just the text block updates in place; math block untouched.
+- B. **Unified Save (per-session)** — desktop: ExportBar shows ONE Save button → click opens a picker listing MD / SVG / PNG / JPG / JSON / DOCX entries scoped to the session's content shape. Mobile: `navigator.share()` fires with the chosen format as a File payload (or downloads if the API is missing).
+- C. **Compile Save** — open the compile builder → click Save → picker offers MD / HTML / DOCX / JSON. Same `saveOrShare()` underneath.
+- D. **Mock badge** — top bar shows `MOCK · docx` only. Drive / Email / Classroom buttons no longer exist anywhere in the UI.
+- E. **Signature insert** — open Sign modal from SourceColumn header → draw → Insert → source pane updates IMMEDIATELY (no reload, no flash). All ExportBar paths see the updated text on the next save.
+- F. **Sketch picker** — vectorize a sketch → click Open → focused-view shows; the back chip is visibly chip-styled (border + tinted bg) and shows the pending-vectorize count when other cards are still pending.
+
+## Prior pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open (2026-04-27)
 
 **Why:** Three pain points the Multi-Sketch sprint exposed:
 1. Worksheet compilation was manual cross-source — the user had to drag every block in. With multi-sketch sessions producing N SVGs each, this got tedious fast.
