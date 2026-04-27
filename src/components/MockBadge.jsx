@@ -15,7 +15,12 @@ function MockBadge() {
   }, []);
 
   if (!status) return null;
-  const mocks = ['email', 'drive', 'classroom', 'docx'].filter(k => status[k] === 'mock');
+  // The streamlined Save flow no longer surfaces Drive / Email / Classroom
+  // buttons (the user routes to those via navigator.share() on mobile or
+  // the OS save dialog on desktop). Their mock status is therefore not
+  // user-relevant — only DOCX still has an in-app button that depends on
+  // the server's pandoc binary.
+  const mocks = ['docx'].filter(k => status[k] === 'mock');
   if (mocks.length === 0) return null;
 
   return (

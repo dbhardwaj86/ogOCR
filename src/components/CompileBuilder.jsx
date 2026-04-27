@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BLOCK_KINDS,
   addBlock,
@@ -10,25 +10,13 @@ import {
   setPageSize,
   setTheme,
   touchCompile,
-  compileToMarkdown,
-  compileToHtml,
   compileSummary,
-  hydrateCompileImages,
 } from '../compile';
 import CompilePalette from './CompilePalette';
 import CompileBlockCard from './CompileBlockCard';
-import { showError, showInfo } from '../errors/showError';
-import { exportDocx } from '../exportDocx';
-
-function downloadBlob(content, filename, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+import { showError } from '../errors/showError';
+import { errFromException } from '../errors/errFromResponse';
+import { buildCompileFormats } from '../saveFormats';
 
 const FILENAME_BAD_CHARS = /[\\/:*?"<>|]/g;
 const FILENAME_BIDI = /[‎‏‪-‮]/g;
@@ -40,6 +28,52 @@ function safeFilename(name) {
     .trim()
     .slice(0, 200);
   return cleaned || 'compile';
+}
+
+// Inner picker list — mounts fresh on each open so activeIdx defaults
+// to 0 implicitly. Keeps the parent free of effect-driven setState.
+function CompileSavePicker({ formats, onPick, returnFocusTo, onClose }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+  const onItemKey = (e, idx) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIdx((idx + 1) % formats.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIdx((idx - 1 + formats.length) % formats.length);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onPick(formats[idx]);
+    } else if (e.key === 'Escape' || e.key === 'Tab') {
+      onClose();
+      returnFocusTo?.current?.focus();
+    }
+  };
+  return (
+    <ul
+      className="og-export-menu-list"
+      role="menu"
+      aria-label="Save format"
+      data-testid="og-compile-save-menu"
+    >
+      {formats.map((it, idx) => (
+        <li key={it.id} role="none">
+          <button
+            type="button"
+            role="menuitem"
+            className="og-export-menu-item"
+            tabIndex={idx === activeIdx ? 0 : -1}
+            ref={el => { if (el && idx === activeIdx) el.focus(); }}
+            onClick={() => onPick(it)}
+            onKeyDown={(e) => onItemKey(e, idx)}
+          >
+            <span className="og-export-glyph" aria-hidden="true">{it.glyph}</span>
+            <span>{it.label}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function CompileBuilder({
@@ -120,44 +154,53 @@ function CompileBuilder({
     setDropTargetId(null);
   }, [dragId, replaceActive]);
 
-  const handleSaveMd = useCallback(() => {
-    if (!activeCompile) return;
-    try {
-      const md = compileToMarkdown(activeCompile, sessions);
-      downloadBlob(md, safeFilename(activeCompile.name) + '.md', 'text/markdown;charset=utf-8');
-      showInfo('Markdown saved');
-    } catch (err) {
-      console.error('compile MD save failed', err);
-      showError('EXP_GENERIC', { message: 'Could not save markdown bundle.', hint: 'Check the diagnostics panel.' });
-    }
-  }, [activeCompile, sessions]);
+  // Single Save button → format picker. Replaces the legacy 4-button row
+  // (Save .md / Save .html / Save .docx / Print → PDF). Print stays as its
+  // own button — different intent (browser dialog) from "save a file".
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const pickerRef = useRef(null);
+  const pickerBtnRef = useRef(null);
 
-  const handleSaveHtml = useCallback(() => {
-    if (!activeCompile) return;
-    try {
-      const html = compileToHtml(activeCompile, sessions);
-      downloadBlob(html, safeFilename(activeCompile.name) + '.html', 'text/html;charset=utf-8');
-      showInfo('HTML saved');
-    } catch (err) {
-      console.error('compile HTML save failed', err);
-      showError('EXP_GENERIC', { message: 'Could not save HTML bundle.', hint: 'Check the diagnostics panel.' });
-    }
-  }, [activeCompile, sessions]);
+  const baseName = safeFilename(activeCompile?.name);
+  const formats = activeCompile
+    ? buildCompileFormats({ compile: activeCompile, sessions, baseName })
+    : [];
 
-  const handleSaveDocx = useCallback(async () => {
-    if (!activeCompile) return;
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    const onDoc = (e) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+        setPickerOpen(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setPickerOpen(false);
+        pickerBtnRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
+
+  const runFormat = useCallback(async (format) => {
+    if (!format || running) return;
+    setRunning(true);
+    setPickerOpen(false);
     try {
-      const hydrated = await hydrateCompileImages(activeCompile);
-      const md = compileToMarkdown(hydrated, sessions);
-      await exportDocx({
-        markdown: md,
-        filename: safeFilename(activeCompile.name) + '.docx',
-      });
+      await format.run();
     } catch (err) {
-      console.error('compile DOCX save failed', err);
-      showError('EXP_GENERIC', { message: 'Could not start Word export.', hint: 'Check the diagnostics panel.' });
+      const entry = errFromException(err);
+      showError(entry.code, { message: entry.message, hint: entry.hint });
+    } finally {
+      setRunning(false);
     }
-  }, [activeCompile, sessions]);
+  }, [running]);
 
   const handlePrint = useCallback(() => {
     if (!activeCompile || activeCompile.blocks.length === 0) {
@@ -203,17 +246,38 @@ function CompileBuilder({
                 <span className="og-compile-canvas-meta">{compileSummary(activeCompile)}</span>
               </div>
               <div className="og-compile-canvas-actions">
-                <button type="button" className="og-export-btn" onClick={handleSaveMd} disabled={blocks.length === 0}>
-                  <span>Save .md</span>
-                </button>
-                <button type="button" className="og-export-btn" onClick={handleSaveHtml} disabled={blocks.length === 0}>
-                  <span>Save .html</span>
-                </button>
-                <button type="button" className="og-export-btn" onClick={handleSaveDocx} disabled={blocks.length === 0}>
-                  <span>Save .docx</span>
-                </button>
+                <div className="og-export-menu" ref={pickerRef}>
+                  <button
+                    ref={pickerBtnRef}
+                    type="button"
+                    className="og-export-menu-btn og-export-save-btn"
+                    aria-haspopup="menu"
+                    aria-expanded={pickerOpen}
+                    disabled={blocks.length === 0 || running}
+                    onClick={() => setPickerOpen(o => !o)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setPickerOpen(true);
+                      }
+                    }}
+                    data-testid="og-compile-save-btn"
+                  >
+                    <span className="og-export-glyph" aria-hidden="true">{running ? '◐' : '↓'}</span>
+                    <span>{running ? 'Saving…' : 'Save'}</span>
+                    <span className="og-export-menu-caret" aria-hidden="true">▾</span>
+                  </button>
+                  {pickerOpen && formats.length > 0 && (
+                    <CompileSavePicker
+                      formats={formats}
+                      onPick={runFormat}
+                      returnFocusTo={pickerBtnRef}
+                      onClose={() => setPickerOpen(false)}
+                    />
+                  )}
+                </div>
                 <button type="button" className="og-export-btn" onClick={handlePrint} disabled={blocks.length === 0}>
-                  <span>Print {String.fromCharCode(8594)} PDF</span>
+                  <span>Print</span>
                 </button>
               </div>
             </header>

@@ -4,12 +4,20 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import ExportBar from '../components/ExportBar.jsx';
 
-const SESSION = Object.freeze({
+const TEXT_SESSION = Object.freeze({
   id: 'sess_test',
   filename: 'sample.png',
   text: 'Hello world',
   svg: '',
   kind: 'text',
+});
+
+const SVG_SESSION = Object.freeze({
+  id: 'sess_svg',
+  filename: 'shape.png',
+  text: '',
+  svg: '<svg viewBox="0 0 1 1"><rect/></svg>',
+  kind: 'sketch',
 });
 
 beforeEach(() => {
@@ -20,69 +28,61 @@ afterEach(() => {
   cleanup();
 });
 
-describe('ExportBar', () => {
-  it('renders the three menu buttons (Save / Share / Export)', () => {
-    render(React.createElement(ExportBar, { session: SESSION, processing: false }));
-    const triggers = document.querySelectorAll('.og-export-menu-btn');
-    const labels = Array.from(triggers).map(t => t.textContent.trim());
-    expect(labels).toEqual(expect.arrayContaining(['Save▾', 'Share▾', 'Export▾']));
-    expect(triggers.length).toBe(3);
+describe('ExportBar (streamlined)', () => {
+  it('renders the three primary affordances: Save, Copy, Print', () => {
+    render(React.createElement(ExportBar, { session: TEXT_SESSION, processing: false }));
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const labels = buttons.map(b => b.textContent.trim());
+    expect(labels.some(l => l.includes('Save'))).toBe(true);
+    expect(labels.some(l => l.includes('Copy'))).toBe(true);
+    expect(labels.some(l => l.includes('Print'))).toBe(true);
   });
 
-  it('opens the Save menu and reveals Drive / MD / PDF entries on click', () => {
-    render(React.createElement(ExportBar, { session: SESSION, processing: false }));
-    const triggers = document.querySelectorAll('.og-export-menu-btn');
-    const saveTrigger = Array.from(triggers).find(t => t.textContent.startsWith('Save'));
-    fireEvent.click(saveTrigger);
-    const menu = screen.getByRole('menu', { name: /save menu/i });
+  it('does NOT render the legacy Drive / Email / Classroom / Share-link buttons', () => {
+    render(React.createElement(ExportBar, { session: TEXT_SESSION, processing: false }));
+    const text = document.body.textContent.toLowerCase();
+    expect(text).not.toContain('drive');
+    expect(text).not.toContain('email');
+    expect(text).not.toContain('classroom');
+    // 'Link' could be a substring of common words ("link to"), so check the
+    // legacy aria-label / button text exactly.
+    expect(screen.queryByRole('button', { name: /^link$/i })).toBeNull();
+  });
+
+  it('opens the Save picker on click and lists MD + JSON for a text-only session', () => {
+    render(React.createElement(ExportBar, { session: TEXT_SESSION, processing: false }));
+    const saveBtn = screen.getByTestId('og-save-btn');
+    fireEvent.click(saveBtn);
+    const menu = screen.getByTestId('og-save-menu');
     const items = within(menu).getAllByRole('menuitem');
-    const labels = items.map(i => i.textContent.toLowerCase());
-    expect(labels.some(l => l.includes('drive'))).toBe(true);
-    expect(labels.some(l => l.includes('md'))).toBe(true);
-    expect(labels.some(l => l.includes('pdf'))).toBe(true);
+    const labels = items.map(i => i.textContent);
+    expect(labels.some(l => l.includes('MD'))).toBe(true);
+    expect(labels.some(l => l.includes('JSON'))).toBe(true);
+    expect(labels.some(l => l.includes('DOCX'))).toBe(true);
   });
 
-  it('shows recent folders from localStorage in the Drive folder dropdown', () => {
-    localStorage.setItem(
-      'ogOCR_drive_recent',
-      JSON.stringify(['/Math/Algebra', '/Science', '/Misc'])
-    );
-    render(React.createElement(ExportBar, { session: SESSION, processing: false }));
-    const input = screen.getByLabelText(/drive folder path/i);
-    fireEvent.focus(input);
-    const listbox = screen.getByRole('listbox', { name: /recent drive folders/i });
-    const options = within(listbox).getAllByRole('option');
-    const texts = options.map(o => o.textContent);
-    expect(texts).toContain('/Math/Algebra');
-    expect(texts).toContain('/Science');
-    expect(texts).toContain('/Misc');
+  it('shows SVG (not MD) format when session has an SVG', () => {
+    render(React.createElement(ExportBar, { session: SVG_SESSION, processing: false }));
+    fireEvent.click(screen.getByTestId('og-save-btn'));
+    const menu = screen.getByTestId('og-save-menu');
+    const labels = within(menu).getAllByRole('menuitem').map(i => i.textContent);
+    expect(labels.some(l => l.includes('SVG'))).toBe(true);
+    // PNG / JPG appear once buildSvgExports yields ≥1 entry — SVG_SESSION qualifies.
+    expect(labels.some(l => l.includes('PNG'))).toBe(true);
+    expect(labels.some(l => l.includes('JPG'))).toBe(true);
   });
 
-  it('clicking a recent folder fills the input and closes the menu', () => {
-    localStorage.setItem(
-      'ogOCR_drive_recent',
-      JSON.stringify(['/Math/Algebra'])
-    );
-    render(React.createElement(ExportBar, { session: SESSION, processing: false }));
-    const input = screen.getByLabelText(/drive folder path/i);
-    fireEvent.focus(input);
-    const option = screen.getByRole('option', { name: '/Math/Algebra' });
-    fireEvent.click(option);
-    expect(input.value).toBe('/Math/Algebra');
-    expect(screen.queryByRole('listbox', { name: /recent drive folders/i })).toBeNull();
+  it('disables the Save button when there is no content', () => {
+    const empty = { id: 'e', filename: 'e.png', text: '', svg: '', kind: 'text' };
+    render(React.createElement(ExportBar, { session: empty, processing: false }));
+    const saveBtn = screen.getByTestId('og-save-btn');
+    expect(saveBtn.disabled).toBe(true);
   });
 
-  it('falls back to the bottom-sheet when navigator.share is missing', () => {
-    const original = Object.getOwnPropertyDescriptor(globalThis.navigator, 'share');
-    Object.defineProperty(globalThis.navigator, 'share', { value: undefined, configurable: true });
-    try {
-      render(React.createElement(ExportBar, { session: SESSION, processing: false }));
-      const fab = screen.getByTestId('og-share-fab');
-      fireEvent.click(fab);
-      expect(screen.getByRole('dialog', { name: /share options/i })).toBeTruthy();
-    } finally {
-      if (original) Object.defineProperty(globalThis.navigator, 'share', original);
-      else delete globalThis.navigator.share;
-    }
+  it('Print button is disabled with no content', () => {
+    const empty = { id: 'e', filename: 'e.png', text: '', svg: '', kind: 'text' };
+    render(React.createElement(ExportBar, { session: empty, processing: false }));
+    const printBtn = screen.getByRole('button', { name: /^print$/i });
+    expect(printBtn.disabled).toBe(true);
   });
 });

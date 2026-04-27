@@ -146,6 +146,28 @@ function OutputColumn({
     }
   }, [session?.id, session?.sketches?.length]);
 
+  // Auto-flip mode to 'rendered' when the user clicks "Open" on a sketch
+  // card (openSketch sets session.selectedSketchId AND session.svg). Without
+  // this, mode stays at 'sketches' and the picker keeps rendering — the
+  // Open click feels like a no-op. The mode-flip makes the focused-view
+  // visible, which is also where the "Show all sketches" link lives.
+  const lastOpenedSketchKey = useRef('');
+  useEffect(() => {
+    const sid = session?.id || '';
+    const ssid = session?.selectedSketchId || '';
+    const hasSvg = !!(session?.svg && session.svg.length);
+    const key = `${sid}:${ssid}:${hasSvg ? '1' : '0'}`;
+    if (key === lastOpenedSketchKey.current) return;
+    const prev = lastOpenedSketchKey.current;
+    lastOpenedSketchKey.current = key;
+    if (!sid || !ssid || !hasSvg) return;
+    const [prevSid, prevSsid, prevHasSvg] = prev.split(':');
+    // Treat a fresh selection-with-svg on the same session as an Open click.
+    if (prevSid === sid && (prevSsid !== ssid || prevHasSvg !== '1')) {
+      setMode('rendered');
+    }
+  }, [session?.id, session?.selectedSketchId, session?.svg]);
+
   // If the user picked the Refine pill but the session no longer has any
   // populated refinements (e.g. switched sessions), fall back to Preview.
   // Same idea for Diagram / Equation / Sketches: if the active session no
@@ -287,22 +309,26 @@ function OutputColumn({
       )}
 
       <div className="og-output-canvas">
-        {/* v3 — "Show all sketches" affordance. Visible only when the user
-           opened a single sketch into the focused view (`session.svg` set)
-           AND the multi-sketch picker has 2+ sketches behind it
-           (`session.sketches`). Click returns to the picker without losing
-           any vectorized SVGs. */}
+        {/* "Show all sketches" chip — visible whenever the user is in the
+           focused-view for a sketch (rendered mode + session.svg) and at
+           least one sketch lives behind it. Pending-count surfaces in the
+           label so in-flight work is visible from the focused view. */}
         {effectiveMode === 'rendered'
           && session?.svg
           && Array.isArray(session?.sketches)
-          && session.sketches.length >= 2
+          && session.sketches.length >= 1
           && onShowAllSketches && (
           <div className="og-output-back-strip print-hide">
             <button
               type="button"
               className="og-output-back-link"
               onClick={onShowAllSketches}
-            >← Show all sketches ({session.sketches.length})</button>
+            >← Show all sketches ({session.sketches.length}{
+              (() => {
+                const pending = session.sketches.filter(s => s && (s.status === 'pending' || s.status === 'running')).length;
+                return pending > 0 ? ` — ${pending} still vectorizing` : '';
+              })()
+            })</button>
           </div>
         )}
         {effectiveMode === 'rendered' && (

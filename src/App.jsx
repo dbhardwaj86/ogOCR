@@ -693,9 +693,16 @@ function App() {
         } else if (languageOverride) {
           updates.languageOverride = languageOverride;
         }
+        // v4 — preserve prior actions' outputs by merging into a per-action
+        // map. Each new extraction populates outputs[actionId] below in the
+        // result-shape branches; other actions' entries survive untouched.
+        const priorOutputs = (activeSession && typeof activeSession.outputs === 'object')
+          ? activeSession.outputs
+          : {};
         if (data.svg) {
           updates.svg = data.svg;
           updates.text = '';
+          updates.outputs = { ...priorOutputs, [actionId]: { kind: 'svg', svg: data.svg } };
           hadResponse = true;
         } else if (Array.isArray(data.sketches)) {
           // Multi-sketch discovery path (Phase 15). The server detected 2+
@@ -758,6 +765,7 @@ function App() {
         } else if (typeof data.text === 'string') {
           updates.text = data.text;
           updates.svg = '';
+          updates.outputs = { ...priorOutputs, [actionId]: { kind: 'text', text: data.text } };
           hadResponse = true;
         }
       }
@@ -989,6 +997,7 @@ function App() {
         if (data.svg) {
           updates.svg = data.svg;
           updates.text = '';
+          updates.outputs = { [actionId]: { kind: 'svg', svg: data.svg } };
           hadResponse = true;
         } else if (Array.isArray(data.sketches)) {
           // Multi-sketch discovery in queue-batch flow. Same shape as runAction.
@@ -1031,6 +1040,7 @@ function App() {
         } else if (typeof data.text === 'string') {
           updates.text = data.text;
           updates.svg = '';
+          updates.outputs = { [actionId]: { kind: 'text', text: data.text } };
           hadResponse = true;
         }
 
@@ -1263,6 +1273,7 @@ function App() {
           file={file}
           processing={processing}
           onRun={runAction}
+          onUpdateSession={(updates) => activeSessionId && updateSession(activeSessionId, updates)}
         />
         <ErrorBoundary>
           <OutputColumn

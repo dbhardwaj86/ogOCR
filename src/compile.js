@@ -27,6 +27,19 @@
 //        `'auto:refinement:<kind>'`). `syncAutoBlocks(compile, session)`
 //        reconciles all auto-tagged blocks from a session snapshot;
 //        manual blocks and user drag-reorders are never touched.
+//   v4 — action-keyed auto blocks. The single `'auto:text'` and
+//        `'auto:svg:main'` slots are gone — each magic action's output
+//        gets its own block keyed by `auto:text:<actionId>` or
+//        `auto:svg:<actionId>` (e.g. `auto:text:text`, `auto:text:math`,
+//        `auto:svg:sketch`). This means running Extract-text after Math-
+//        to-LaTeX no longer wipes the Math output from the worksheet —
+//        every distinct action accumulates its own block, while re-running
+//        the SAME action replaces in place. Reconciliation reads from a
+//        new `session.outputs` map (`{ [actionId]: { kind, text|svg } }`)
+//        populated by `runAction`. Migration: legacy `auto:text` and
+//        `auto:svg:main` blocks are demoted to `manual` so existing
+//        compiles keep their content as historical snapshots and the new
+//        action-keyed blocks accumulate alongside.
 
 import { sanitizeSvg } from './svgSanitize';
 import {
@@ -35,7 +48,7 @@ import {
   blobToDataURL,
 } from './storage/idb';
 
-export const COMPILE_SCHEMA_VERSION = 3;
+export const COMPILE_SCHEMA_VERSION = 4;
 export const COMPILE_STORAGE_KEY = 'ogOCR_compiles';
 export const ACTIVE_COMPILE_KEY = 'ogOCR_active_compile';
 
@@ -48,15 +61,25 @@ export const BLOCK_KINDS = Object.freeze({
   EQUATION: 'equation',
 });
 
-// Block-role tags for the per-source auto-compile sync (v3). Manual blocks
-// (added through the palette / insert rail) wear `'manual'`; auto-managed
-// blocks wear one of the `auto:*` tags below. Sync targets the right slot
-// without ever touching `'manual'` blocks.
+// Block-role tags. Manual blocks (added through the palette / insert rail)
+// wear `'manual'`; auto-managed blocks wear an `auto:*` tag below.
+// AUTO_TEXT and AUTO_SVG_MAIN are v3 legacy roles — never produced from v4
+// onwards, but kept for migration logic + tests that reference them.
 export const BLOCK_ROLES = Object.freeze({
   MANUAL: 'manual',
   AUTO_TEXT: 'auto:text',
   AUTO_SVG_MAIN: 'auto:svg:main',
 });
+
+// v4 — action-keyed role helpers. Each magic-action's output gets its own
+// block keyed by actionId so different actions accumulate in the worksheet
+// instead of overwriting one shared slot.
+export function autoTextActionRole(actionId) {
+  return `auto:text:${actionId}`;
+}
+export function autoSvgActionRole(actionId) {
+  return `auto:svg:${actionId}`;
+}
 
 export function autoSvgSketchRole(sketchId) {
   return `auto:svg:sketch-${sketchId}`;
@@ -74,12 +97,26 @@ export function isAutoRole(role) {
 
 // Canonical-order rank for auto-tagged blocks. Manual blocks return Infinity
 // so they don't participate in canonical ordering — their position is
-// preserved as-is when sync runs.
+// preserved as-is when sync runs. Within the same rank, blocks accumulate
+// in insertion order (since `insertAtCanonicalPosition` inserts before the
+// first higher-rank block).
 export function autoRoleRank(role) {
+  if (typeof role !== 'string') return Infinity;
+  // v3 legacy roles still map to their old positions in case they slip
+  // through the migration.
   if (role === BLOCK_ROLES.AUTO_TEXT) return 0;
   if (role === BLOCK_ROLES.AUTO_SVG_MAIN) return 1;
-  if (typeof role === 'string' && role.startsWith('auto:svg:sketch-')) return 2;
-  if (typeof role === 'string' && role.startsWith('auto:image:')) return 3;
+  // v4: action-keyed sketch slots come BEFORE generic action-keyed svg
+  // (auto:svg:sketch-…) so the picker stays grouped together. Order:
+  //   auto:text:*       → 0
+  //   auto:svg:<action> → 1   (e.g. auto:svg:sketch — single-sketch path)
+  //   auto:svg:sketch-* → 2   (per-sketch picker outputs)
+  //   auto:image:*      → 3
+  //   auto:refinement:* → 4–7
+  if (role.startsWith('auto:text:')) return 0;
+  if (role.startsWith('auto:svg:sketch-')) return 2;
+  if (role.startsWith('auto:svg:')) return 1;
+  if (role.startsWith('auto:image:')) return 3;
   if (role === 'auto:refinement:summary') return 4;
   if (role === 'auto:refinement:bullets') return 5;
   if (role === 'auto:refinement:formal') return 6;
@@ -125,8 +162,19 @@ export function migrateCompile(c) {
   // v2 → v3: default `sourceId` to null (manual cross-source compile) and
   // tag every existing block with `role: 'manual'` so auto-sync never
   // touches user-built compiles retroactively.
+  // v3 → v4: legacy `auto:text` and `auto:svg:main` slots no longer exist
+  // — demote them to `manual` so the user keeps their content as a
+  // historical snapshot, and future extractions accumulate as new
+  // action-keyed blocks alongside.
   const blocks = Array.isArray(c.blocks)
-    ? c.blocks.map(b => (b && !b.role ? { ...b, role: BLOCK_ROLES.MANUAL } : b))
+    ? c.blocks.map(b => {
+      if (!b) return b;
+      const next = b.role ? b : { ...b, role: BLOCK_ROLES.MANUAL };
+      if (next.role === BLOCK_ROLES.AUTO_TEXT || next.role === BLOCK_ROLES.AUTO_SVG_MAIN) {
+        return { ...next, role: BLOCK_ROLES.MANUAL };
+      }
+      return next;
+    })
     : [];
   return {
     ...createCompile({ name: c.name }),
@@ -506,32 +554,47 @@ const REFINE_KIND_ORDER = ['summary', 'bullets', 'formal', 'casual'];
 // snapshot. Each entry describes one auto block the worksheet should hold.
 // Used by `syncAutoBlocks` to diff against the existing compile.
 //
-// Dedup rule: when `session.svg` matches a vectorized sketch's svg byte-
-// for-byte, we skip emitting `auto:svg:main` because it's just a focused
-// view of that sketch (set by `openSketch`) and the sketch already has its
-// own `auto:svg:sketch-<id>` block.
+// v4 — action-keyed: walks `session.outputs` (a map keyed by actionId) and
+// emits one block per entry. Re-running the same actionId replaces that
+// one block in place; running a DIFFERENT action adds a new block alongside
+// (so prior outputs accumulate in the worksheet instead of getting wiped).
+//
+// Dedup rule still applies: when an action's SVG output byte-matches a
+// vectorized sketch's svg, we skip the action-keyed block — the sketch
+// already has its own `auto:svg:sketch-<id>` block and rendering both
+// would double the picker's output.
 export function computeDesiredAutoBlocks(session) {
   const out = [];
   if (!session || typeof session !== 'object') return out;
 
-  const text = typeof session.text === 'string' ? session.text : '';
-  if (text.trim()) {
-    out.push({
-      role: BLOCK_ROLES.AUTO_TEXT,
-      blockSpec: { kind: BLOCK_KINDS.TEXT, text },
-    });
-  }
-
   const sketches = Array.isArray(session.sketches) ? session.sketches : [];
-  const mainSvg = typeof session.svg === 'string' ? session.svg : '';
-  const mainIsFromSketch = mainSvg
-    && sketches.some(sk => sk && typeof sk.svg === 'string' && sk.svg && sk.svg === mainSvg);
+  const sketchSvgs = sketches
+    .map(sk => (sk && typeof sk.svg === 'string' && sk.svg) ? sk.svg : null)
+    .filter(Boolean);
 
-  if (mainSvg.trim() && !mainIsFromSketch) {
-    out.push({
-      role: BLOCK_ROLES.AUTO_SVG_MAIN,
-      blockSpec: { kind: BLOCK_KINDS.SVG, svg: mainSvg },
-    });
+  const outputs = (session.outputs && typeof session.outputs === 'object')
+    ? session.outputs
+    : null;
+  if (outputs) {
+    for (const [actionId, entry] of Object.entries(outputs)) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.kind === 'text') {
+        const text = typeof entry.text === 'string' ? entry.text : '';
+        if (!text.trim()) continue;
+        out.push({
+          role: autoTextActionRole(actionId),
+          blockSpec: { kind: BLOCK_KINDS.TEXT, text },
+        });
+      } else if (entry.kind === 'svg') {
+        const svg = typeof entry.svg === 'string' ? entry.svg : '';
+        if (!svg.trim()) continue;
+        if (sketchSvgs.includes(svg)) continue; // dedup vs picker sketches
+        out.push({
+          role: autoSvgActionRole(actionId),
+          blockSpec: { kind: BLOCK_KINDS.SVG, svg },
+        });
+      }
+    }
   }
 
   for (const sk of sketches) {

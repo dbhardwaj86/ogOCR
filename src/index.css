@@ -1464,24 +1464,34 @@ kbd, code { font-family: var(--mono); }
   padding: 8px 10px 2px;
 }
 
-/* v3 — focused-sketch view back-link, sits above the rendered canvas when
-   the user has drilled into a single sketch from the multi-sketch picker. */
+/* Focused-sketch view back-link — chip styling so the affordance is
+   plainly visible when the user has drilled into a single sketch. Earlier
+   versions used a thin transparent text link that was easy to miss. */
 .og-output-back-strip {
-  padding: 6px 0;
+  padding: 8px 0 4px;
   display: flex;
 }
 .og-output-back-link {
-  border: 0;
-  background: transparent;
+  border: 1px solid var(--rule-soft);
+  background: var(--bg-tint, var(--accent-soft));
   color: var(--accent-ink, var(--accent));
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.04em;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 8px 14px;
   border-radius: var(--r-chip, 4px);
+  font-weight: 600;
+  transition: background var(--tx-fast, 0.14s), border-color var(--tx-fast, 0.14s);
 }
-.og-output-back-link:hover { background: var(--accent-soft); }
+.og-output-back-link:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.og-output-back-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .og-compile-palette-row--source { flex-direction: column; align-items: stretch; gap: 4px; padding: 4px; }
 

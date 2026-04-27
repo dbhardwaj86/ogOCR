@@ -1,201 +1,49 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { showError, showInfo } from '../errors/showError';
-import { errFromResponse, errFromException } from '../errors/errFromResponse';
-import { exportDocx } from '../exportDocx';
-import { buildSvgExports } from '../svgExports';
-import SignatureModal from './SignatureModal';
+import { errFromException } from '../errors/errFromResponse';
+import { buildSessionFormats } from '../saveFormats';
 
-const DRIVE_RECENT_KEY = 'ogOCR_drive_recent';
-const DRIVE_RECENT_MAX = 5;
-const DRIVE_RECENT_PERSIST = 10;
-
-function readRecentFolders() {
-  try {
-    const raw = localStorage.getItem(DRIVE_RECENT_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(p => typeof p === 'string' && p.trim()).slice(0, DRIVE_RECENT_MAX);
-  } catch {
-    return [];
-  }
-}
-
-function rememberRecentFolder(path) {
-  if (!path || !path.trim()) return;
-  try {
-    const existing = (() => {
-      try {
-        const raw = localStorage.getItem(DRIVE_RECENT_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed.filter(p => typeof p === 'string' && p.trim()) : [];
-      } catch {
-        return [];
-      }
-    })();
-    const next = [path, ...existing.filter(p => p !== path)].slice(0, DRIVE_RECENT_PERSIST);
-    localStorage.setItem(DRIVE_RECENT_KEY, JSON.stringify(next));
-  } catch {
-    /* ignore — best-effort persistence */
-  }
-}
-
-// Rasterize a single SVG string to a PNG or JPG download. Each SVG is
-// drawn at its own native viewBox dimensions — multi-SVG callers feed us
-// one SVG at a time and we never composite them onto a single canvas. The
-// white-fill is correct for both formats: PNG ignores it under transparent
-// pixels, JPG (which has no alpha) needs it to avoid a black background.
-//
-// Returns a promise that resolves on download trigger / rejects with the
-// same `(code, message)` shape the legacy onError callback used. The
-// onError callback path is kept for back-compat with existing call sites.
-function exportRaster(svgString, { format = 'png', filename, quality = 0.92, onError } = {}) {
-  return new Promise((resolve) => {
-    const div = document.createElement('div');
-    div.innerHTML = svgString;
-    const svgEl = div.querySelector('svg');
-    if (!svgEl) {
-      onError && onError('EXP_SVG_BROWSER_LIMIT', 'No <svg> root found in this content.');
-      resolve(false);
-      return;
-    }
-
-    const vb = svgEl.viewBox?.baseVal;
-    const w = parseFloat(svgEl.getAttribute('width')) || (vb?.width) || 800;
-    const h = parseFloat(svgEl.getAttribute('height')) || (vb?.height) || 600;
-    if (!svgEl.getAttribute('width')) svgEl.setAttribute('width', w);
-    if (!svgEl.getAttribute('height')) svgEl.setAttribute('height', h);
-
-    const svgData = new XMLSerializer().serializeToString(svgEl);
-    const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-
-    const mime = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
-    const ext = mime === 'image/jpeg' ? '.jpg' : '.png';
-    const finalName = filename
-      ? (/\.(png|jpe?g)$/i.test(filename) ? filename : filename + ext)
-      : 'ogOCR_Export' + ext;
-
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width || w;
-        canvas.height = img.height || h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-        const a = document.createElement('a');
-        a.href = mime === 'image/jpeg'
-          ? canvas.toDataURL(mime, quality)
-          : canvas.toDataURL(mime);
-        a.download = finalName;
-        a.click();
-        resolve(true);
-      } catch (err) {
-        onError && onError('EXP_SVG_BROWSER_LIMIT', err?.message);
-        resolve(false);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      onError && onError('EXP_SVG_BROWSER_LIMIT', 'Image failed to load before rasterization.');
-      resolve(false);
-    };
-    img.src = url;
-  });
-}
-
-
-function downloadBlob(content, filename, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function EmailDialog({ open, onClose, onSubmit, busy }) {
-  const [email, setEmail] = useState('');
-  if (!open) return null;
-  return (
-    <div className="og-palette-shroud" onClick={onClose}>
-      <div className="og-palette" onClick={(e) => e.stopPropagation()} style={{ padding: 18 }}>
-        <div style={{ fontFamily: 'var(--serif)', fontSize: 20, fontStyle: 'italic', marginBottom: 12 }}>
-          Email this document
-        </div>
-        <input
-          className="og-prompt-input"
-          type="email"
-          placeholder="recipient@example.com"
-          value={email}
-          autoFocus
-          onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') onSubmit(email); if (e.key === 'Escape') onClose(); }}
-        />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-          <button className="og-export-btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="og-prompt-run" onClick={() => onSubmit(email)} disabled={busy || !email}>
-            {busy ? 'Working…' : 'Send'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Generic dropdown menu used by the three Save/Share/Export groups.
-// Renders a button + popover list. Keyboard-nav: Enter/Space opens, ↓/↑
-// move between items, Enter activates, Escape closes. Outside-click closes.
-// Inner list — lives only while the menu is open. Mounting fresh resets
-// activeIdx to 0 implicitly, so we never call setState from an effect.
-function MenuList({ items, label, idPrefix, onClose, returnFocusTo }) {
+// Inner picker list — lives only while the menu is open. Mounting fresh
+// resets activeIdx to 0 implicitly so we never call setState from an effect
+// (forbidden by react-hooks/set-state-in-effect; also unnecessary since the
+// component remounts on every open).
+function PickerList({ formats, onPick, returnFocusTo, onClose }) {
   const [activeIdx, setActiveIdx] = useState(0);
-
-  const handleItemKey = (e, idx, item) => {
+  const onItemKey = (e, idx) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActiveIdx((idx + 1) % items.length);
+      setActiveIdx((idx + 1) % formats.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActiveIdx((idx - 1 + items.length) % items.length);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
-      returnFocusTo?.current?.focus();
+      setActiveIdx((idx - 1 + formats.length) % formats.length);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      if (!item.disabled) {
-        item.onClick();
-        onClose();
-      }
-    } else if (e.key === 'Tab') {
+      onPick(formats[idx]);
+    } else if (e.key === 'Escape' || e.key === 'Tab') {
       onClose();
+      returnFocusTo?.current?.focus();
     }
   };
-
   return (
-    <ul className="og-export-menu-list" role="menu" aria-label={label + ' menu'}>
-      {items.map((it, idx) => (
+    <ul
+      className="og-export-menu-list"
+      role="menu"
+      aria-label="Save format"
+      data-testid="og-save-menu"
+    >
+      {formats.map((it, idx) => (
         <li key={it.id} role="none">
           <button
             type="button"
             role="menuitem"
-            id={`${idPrefix}-${it.id}`}
             className="og-export-menu-item"
-            disabled={it.disabled}
             tabIndex={idx === activeIdx ? 0 : -1}
             ref={el => { if (el && idx === activeIdx) el.focus(); }}
-            onClick={() => { if (!it.disabled) { it.onClick(); onClose(); } }}
-            onKeyDown={(e) => handleItemKey(e, idx, it)}
+            onClick={() => onPick(it)}
+            onKeyDown={(e) => onItemKey(e, idx)}
+            data-testid={`og-save-item-${it.id}`}
           >
-            <span className="og-export-glyph">{it.glyph}</span>
+            <span className="og-export-glyph" aria-hidden="true">{it.glyph}</span>
             <span>{it.label}</span>
           </button>
         </li>
@@ -204,113 +52,74 @@ function MenuList({ items, label, idPrefix, onClose, returnFocusTo }) {
   );
 }
 
-function MenuDropdown({ label, items, openMenu, onOpen, onClose, idPrefix }) {
-  const isOpen = openMenu === label;
+// Streamlined save surface for a single session. Three affordances:
+//
+//   Save  — opens a format picker; format selection builds a file and
+//           hands it to navigator.share() on mobile (Files / iCloud /
+//           Drive native routing) or downloads it on desktop.
+//   Copy  — copies the rendered text/svg to the clipboard. Different
+//           intent from "save a file" so it stays its own button.
+//   Print — opens the browser print dialog. Universal action; user can
+//           Save-as-PDF from there if they want PDF.
+//
+// Drive / Email / Classroom / Share-link / Sign-and-save have been
+// retired from this surface. On mobile the native share sheet routes to
+// any installed app (including Drive / Mail / Classroom), and Sign moved
+// to the source-column where annotation belongs.
+
+// onShowToast is the legacy plain-string callback — kept on the prop list
+// so older callers don't fail to render, but we route everything through
+// the error registry now.
+// eslint-disable-next-line no-unused-vars
+function ExportBar({ session, onShowToast, processing }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [copied, setCopied] = useState(false);
   const containerRef = useRef(null);
   const buttonRef = useRef(null);
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const onDoc = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) onClose();
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [isOpen, onClose]);
-
-  const handleButtonKey = (e) => {
-    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onOpen(label);
-    }
-  };
-
-  return (
-    <div className="og-export-menu" ref={containerRef}>
-      <button
-        ref={buttonRef}
-        type="button"
-        className="og-export-menu-btn"
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-        onClick={() => (isOpen ? onClose() : onOpen(label))}
-        onKeyDown={handleButtonKey}
-      >
-        <span>{label}</span>
-        <span className="og-export-menu-caret" aria-hidden="true">▾</span>
-      </button>
-      {isOpen && (
-        <MenuList
-          items={items}
-          label={label}
-          idPrefix={idPrefix}
-          onClose={onClose}
-          returnFocusTo={buttonRef}
-        />
-      )}
-    </div>
-  );
-}
-
-// onShowToast was the legacy plain-string callback — kept on the prop list so
-// older callers don't need to update, but ignored: every surface here now
-// goes through the central error registry.
-// eslint-disable-next-line no-unused-vars
-function ExportBar({ session, onShowToast, processing }) {
-  const [copied, setCopied] = useState(false);
-  const [emailOpen, setEmailOpen] = useState(false);
-  const [emailBusy, setEmailBusy] = useState(false);
-  const [driveBusy, setDriveBusy] = useState(false);
-  const [classroomBusy, setClassroomBusy] = useState(false);
-  const [folderPath, setFolderPath] = useState('');
-  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
-  const [folderActiveIdx, setFolderActiveIdx] = useState(-1);
-  const [recentFolders, setRecentFolders] = useState(() => readRecentFolders());
-  const [openMenu, setOpenMenu] = useState(null);
-  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
-  const [signatureOpen, setSignatureOpen] = useState(false);
-  // Local override of `session.text` for downstream export operations after a
-  // signature is inserted. Track N is forbidden from editing OutputColumn.jsx
-  // and App.jsx (where the canonical session-update callback lives), so we
-  // keep the appended text here in ExportBar's own state. The override is
-  // also written to localStorage.ogOCR_sessions so a page reload reflects
-  // the change. Keyed by session id so switching sessions clears the
-  // override automatically.
-  const [textOverride, setTextOverride] = useState(null); // { sessionId, text }
-  const folderMenuRef = useRef(null);
-  const folderInputRef = useRef(null);
-
-  // Drop a stale override on the fly without an effect (calling setState in
-  // an effect to derive props is forbidden by react-hooks/set-state-in-effect
-  // — see the React docs note "you might not need an effect"). The override
-  // is only applied when (a) there's an active session, (b) the override
-  // belongs to that session, and (c) the live session.text hasn't already
-  // caught up. Otherwise we read straight from session.text.
-  const overrideApplies = !!textOverride
-    && !!session
-    && textOverride.sessionId === session.id
-    && session.text !== textOverride.text;
-  const effectiveText = overrideApplies
-    ? textOverride.text
-    : (session?.text || '');
-
-  const noContent = !session || (!effectiveText && !session.svg);
-  const content = session?.svg || effectiveText || '';
+  const text = session?.text || '';
+  const svg = session?.svg || '';
+  const noContent = !session || (!text && !svg);
   const rawBase = (session?.exportName?.trim() || session?.filename || 'ogOCR_Document');
   const baseName = rawBase.replace(/\.[^.]+$/, '');
 
-  // Close the recent-folders dropdown on outside click.
+  const formats = buildSessionFormats({ session, baseName });
+
   useEffect(() => {
-    if (!folderMenuOpen) return undefined;
+    if (!pickerOpen) return undefined;
     const onDoc = (e) => {
-      if (folderMenuRef.current && !folderMenuRef.current.contains(e.target)) {
-        setFolderMenuOpen(false);
-        setFolderActiveIdx(-1);
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setPickerOpen(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setPickerOpen(false);
+        buttonRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [folderMenuOpen]);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
+
+  const runFormat = async (format) => {
+    if (!format || running) return;
+    setRunning(true);
+    setPickerOpen(false);
+    try {
+      await format.run();
+    } catch (err) {
+      const entry = errFromException(err);
+      showError(entry.code, { message: entry.message, hint: entry.hint });
+    } finally {
+      setRunning(false);
+    }
+  };
 
   const handleCopy = async () => {
     if (noContent) {
@@ -321,496 +130,82 @@ function ExportBar({ session, onShowToast, processing }) {
       showError('EXP_CLIPBOARD_NO_API');
       return;
     }
+    const content = svg || text;
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
+      showInfo('Copied to clipboard.');
     } catch {
       showError('EXP_CLIPBOARD_DENIED');
     }
   };
 
-  const handleDrive = useCallback(async () => {
+  const handlePrint = () => {
     if (noContent) {
       showError('EXP_EMAIL_NO_CONTENT');
       return;
     }
-    setDriveBusy(true);
-    try {
-      const ext = session.svg ? '.svg' : '.txt';
-      const trimmedPath = folderPath.trim();
-      const body = { text: content, filename: baseName + ext };
-      if (trimmedPath) body.folderPath = trimmedPath;
-      const r = await fetch('/api/save-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const entry = await errFromResponse(r, 'EXP_DRIVE_GENERIC');
-        showError(entry.code, { message: entry.message, hint: entry.hint });
-        return;
-      }
-      const data = await r.json();
-      if (data.mock) {
-        showError('EXP_DRIVE_MOCK');
-      } else {
-        if (trimmedPath) {
-          rememberRecentFolder(trimmedPath);
-          setRecentFolders(readRecentFolders());
-        }
-        showInfo(data.message || `Saved ${baseName + ext} to Drive.`,
-          data.webViewLink ? 'Open in Drive: ' + data.webViewLink : null);
-      }
-    } catch (err) {
-      const entry = errFromException(err, 'EXP_DRIVE_GENERIC');
-      showError(entry.code, { message: entry.message, hint: entry.hint });
-    } finally {
-      setDriveBusy(false);
-    }
-  }, [noContent, session, folderPath, content, baseName]);
-
-  const handleClassroom = async () => {
-    if (noContent) {
-      showError('EXP_EMAIL_NO_CONTENT');
-      return;
-    }
-    setClassroomBusy(true);
-    try {
-      const r = await fetch('/api/classroom/draft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: content, filename: baseName }),
-      });
-      if (!r.ok) {
-        const entry = await errFromResponse(r, 'OCR_INTERNAL');
-        showError(entry.code, { message: entry.message, hint: entry.hint });
-        return;
-      }
-      const data = await r.json();
-      if (data.info && typeof data.info.code === 'string') {
-        showError(data.info.code, {
-          message: data.info.message,
-          hint: data.info.hint,
-        });
-      } else if (data.mock) {
-        showError('EXP_CLASSROOM_MOCK');
-      } else {
-        showInfo(data.message || 'Drafted to Classroom.');
-      }
-    } catch (err) {
-      const entry = errFromException(err);
-      showError(entry.code, { message: entry.message, hint: entry.hint });
-    } finally {
-      setClassroomBusy(false);
-    }
-  };
-
-  const submitEmail = async (to) => {
-    if (!to) return;
-    setEmailBusy(true);
-    try {
-      const r = await fetch('/api/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: to, text: content, subject: `ogOCR — ${session.filename}` }),
-      });
-      if (!r.ok) {
-        const entry = await errFromResponse(r, 'EXP_EMAIL_NETWORK');
-        showError(entry.code, { message: entry.message, hint: entry.hint });
-        return;
-      }
-      const data = await r.json();
-      if (data.mock) showError('EXP_EMAIL_MOCK');
-      else showInfo(data.message || 'Email sent.');
-      setEmailOpen(false);
-    } catch (err) {
-      const entry = errFromException(err, 'EXP_EMAIL_NETWORK');
-      showError(entry.code, { message: entry.message, hint: entry.hint });
-    } finally {
-      setEmailBusy(false);
-    }
-  };
-
-  const handleLink = async () => {
-    if (!navigator.clipboard) {
-      showError('EXP_CLIPBOARD_NO_API');
-      return;
-    }
-    if (!session?.id) {
-      try {
-        await navigator.clipboard.writeText(window.location.href);
-        showError('EXP_LINK_SELF_ONLY');
-      } catch {
-        showError('EXP_CLIPBOARD_DENIED');
-      }
-      return;
-    }
-    try {
-      const url = `${window.location.origin}${window.location.pathname}?session=${session.id}`;
-      await navigator.clipboard.writeText(url);
-      showError('EXP_LINK_DEEP_LINK');
-    } catch {
-      showError('EXP_CLIPBOARD_DENIED');
-    }
-  };
-
-  const handleMD = () => {
-    if (noContent) return;
-    if (session.svg) {
-      downloadBlob(session.svg, baseName + '.svg', 'image/svg+xml');
-    } else {
-      downloadBlob(effectiveText, baseName + '.md', 'text/markdown');
-    }
-  };
-
-  const handleDocx = async () => {
-    if (noContent) {
-      showError('EXP_EMAIL_NO_CONTENT');
-      return;
-    }
-    // Per-session export: the session's text field is the markdown source.
-    // SVG-only sessions have nothing meaningful to convert to .docx, so fall
-    // through to text and let pandoc handle whatever it gets.
-    const md = session?.text || '';
-    if (!md.trim()) {
-      showError('EXP_EMAIL_NO_CONTENT');
-      return;
-    }
-    await exportDocx({ markdown: md, filename: baseName + '.docx' });
-  };
-
-  // Append the signature SVG to the active session's text. Track N can't edit
-  // OutputColumn.jsx or App.jsx (the canonical setSessions callback isn't
-  // forwarded to ExportBar), so the propagation pattern is two-pronged:
-  //   1) Set a local `textOverride` keyed to the active session id. Every
-  //      ExportBar action (Save .md, Drive, Email, Copy, Classroom) reads
-  //      from `effectiveText` so they pick up the appended signature.
-  //   2) Persist the updated session.text to localStorage.ogOCR_sessions so
-  //      the change survives a page reload (App.jsx hydrates sessions from
-  //      that key on boot). App.jsx's 400 ms debounced write owns the key
-  //      thereafter, but it writes the same data it already holds in state
-  //      so there's nothing to clobber.
-  const handleSignatureInsert = useCallback((svgString) => {
-    if (!session) return;
-    const trimmed = (svgString || '').trim();
-    if (!trimmed) return;
-    const baseText = effectiveText || '';
-    const sep = baseText.length > 0 ? '\n\n' : '';
-    const appended = baseText + sep + trimmed + '\n';
-    setTextOverride({ sessionId: session.id, text: appended });
-    try {
-      const raw = localStorage.getItem('ogOCR_sessions');
-      if (raw) {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) {
-          const next = arr.map(s => (s && s.id === session.id
-            ? { ...s, text: appended, date: Date.now() }
-            : s));
-          localStorage.setItem('ogOCR_sessions', JSON.stringify(next));
-        }
-      }
-    } catch {
-      /* best-effort persistence — App.jsx's debounce will re-write shortly */
-    }
-    showInfo('Signature inserted — Save .md will include it.');
-  }, [session, effectiveText]);
-
-  const handlePDF = () => {
-    if (noContent) return;
     window.print();
   };
 
-  // v3 — raster export covers both `session.svg` and every vectorized
-  // sketch in `session.sketches[]`. Single-SVG state emits one file per
-  // click; multi-SVG state walks the deduplicated list and emits one file
-  // per SVG (no compositing — each SVG keeps its own viewBox dimensions).
-  // The 60ms breather between clicks dodges Chromium's same-origin
-  // download dedup that would otherwise fold N rapid clicks into one.
-  const svgExports = buildSvgExports(session, baseName);
-  const onRasterError = (code, message) => {
-    showError(code, message ? { hint: message } : {});
-  };
-  const handleRasterAll = async (format) => {
-    if (svgExports.length === 0) return;
-    for (let i = 0; i < svgExports.length; i++) {
-      const item = svgExports[i];
-      await exportRaster(item.svg, {
-        format,
-        filename: item.filename,
-        onError: onRasterError,
-      });
-      if (i < svgExports.length - 1) {
-        await new Promise(r => setTimeout(r, 60));
-      }
-    }
-  };
-  const handleRasterSingle = (format) => {
-    if (svgExports.length !== 1) return;
-    return exportRaster(svgExports[0].svg, {
-      format,
-      filename: svgExports[0].filename,
-      onError: onRasterError,
-    });
-  };
-
-  const handleJSON = () => {
-    if (!session) return;
-    downloadBlob(JSON.stringify(session, null, 2), baseName + '.json', 'application/json');
-  };
-
-  // navigator.share fallback. Tries native share, falls back to opening the
-  // 3-menu sheet. AbortError is silent (user cancelled the share dialog).
-  const handleNativeShare = async () => {
-    if (!navigator.share) {
-      setMobileSheetOpen(true);
-      return;
-    }
-    try {
-      await navigator.share({
-        title: session?.filename || 'ogOCR document',
-        text: content || '',
-      });
-    } catch (err) {
-      if (err && err.name !== 'AbortError') {
-        showError('EXP_SHARE_API_UNAVAILABLE');
-        setMobileSheetOpen(true);
-      }
-    }
-  };
-
-  const handleFolderKey = (e) => {
-    if (!folderMenuOpen || recentFolders.length === 0) {
-      if (e.key === 'ArrowDown' && recentFolders.length > 0) {
-        e.preventDefault();
-        setFolderMenuOpen(true);
-        setFolderActiveIdx(0);
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        setFolderMenuOpen(false);
-        handleDrive();
-      } else if (e.key === 'Escape') {
-        setFolderMenuOpen(false);
-        setFolderActiveIdx(-1);
-      }
-      return;
-    }
-    if (e.key === 'ArrowDown') {
+  const onSaveKey = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      setFolderActiveIdx(idx => (idx + 1) % recentFolders.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setFolderActiveIdx(idx => (idx - 1 + recentFolders.length) % recentFolders.length);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (folderActiveIdx >= 0 && folderActiveIdx < recentFolders.length) {
-        setFolderPath(recentFolders[folderActiveIdx]);
-        setFolderMenuOpen(false);
-        setFolderActiveIdx(-1);
-      } else {
-        setFolderMenuOpen(false);
-        handleDrive();
-      }
+      setPickerOpen(true);
     } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setFolderMenuOpen(false);
-      setFolderActiveIdx(-1);
+      setPickerOpen(false);
     }
   };
-
-  const driveLabel = driveBusy ? 'Working…' : 'Drive';
-  const driveGlyph = driveBusy ? <span className="og-proc-spin">◐</span> : '△';
-  const emailLabel = emailBusy ? 'Working…' : 'Email';
-  const emailGlyph = emailBusy ? <span className="og-proc-spin">◐</span> : '✉';
-  const classroomLabel = classroomBusy ? 'Working…' : 'Classroom';
-  const classroomGlyph = classroomBusy ? <span className="og-proc-spin">◐</span> : '◯';
-
-  const saveItems = [
-    { id: 'drive', glyph: driveGlyph, label: driveLabel, onClick: handleDrive,
-      disabled: noContent || processing || driveBusy },
-    { id: 'md',    glyph: '▤', label: session?.svg ? 'SVG' : 'MD', onClick: handleMD, disabled: noContent },
-    { id: 'docx',  glyph: '⌘', label: 'DOCX', onClick: handleDocx, disabled: noContent || !session?.text },
-    { id: 'pdf',   glyph: '▢', label: 'Print → PDF', onClick: handlePDF, disabled: noContent },
-    { id: 'sign',  glyph: '✎', label: 'Sign and save',
-      onClick: () => setSignatureOpen(true), disabled: !session },
-  ];
-  const shareItems = [
-    { id: 'email',     glyph: emailGlyph, label: emailLabel, onClick: () => setEmailOpen(true),
-      disabled: noContent || processing || emailBusy },
-    { id: 'classroom', glyph: classroomGlyph, label: classroomLabel, onClick: handleClassroom,
-      disabled: noContent || processing || classroomBusy },
-    { id: 'link',      glyph: '∞', label: 'Link', onClick: handleLink, disabled: false },
-  ];
-  // Raster items are state-driven (see `buildSvgExports`):
-  //   0 SVGs → no PNG/JPG entries (button row is implicit-disabled)
-  //   1 SVG  → "PNG" + "JPG", each emits one file
-  //   ≥2 SVGs → "All as PNG" + "All as JPG", each emits N separate files
-  const rasterItems = svgExports.length === 0
-    ? []
-    : svgExports.length === 1
-      ? [
-          { id: 'png', glyph: '▦', label: 'PNG', onClick: () => handleRasterSingle('png'), disabled: false },
-          { id: 'jpg', glyph: '▦', label: 'JPG', onClick: () => handleRasterSingle('jpg'), disabled: false },
-        ]
-      : [
-          { id: 'png-all', glyph: '▦',
-            label: `All as PNG (${svgExports.length})`,
-            onClick: () => handleRasterAll('png'),
-            disabled: false },
-          { id: 'jpg-all', glyph: '▦',
-            label: `All as JPG (${svgExports.length})`,
-            onClick: () => handleRasterAll('jpg'),
-            disabled: false },
-        ];
-
-  const exportItems = [
-    { id: 'copy', glyph: copied ? '✓' : '❐', label: copied ? 'Copied' : 'Copy',
-      onClick: handleCopy, disabled: noContent },
-    ...rasterItems,
-    { id: 'json', glyph: '{}',label: 'JSON', onClick: handleJSON, disabled: !session },
-  ];
-
-  const groups = [
-    { label: 'Save',   items: saveItems },
-    { label: 'Share',  items: shareItems },
-    { label: 'Export', items: exportItems },
-  ];
-
-  const onMenuOpen = (label) => setOpenMenu(label);
-  const onMenuClose = () => setOpenMenu(null);
 
   return (
-    <>
-      <div className="og-exports" data-testid="og-exports">
-        {groups.map(g => (
-          <div className="og-export-group" key={g.label}>
-            <MenuDropdown
-              label={g.label}
-              items={g.items}
-              openMenu={openMenu}
-              onOpen={onMenuOpen}
-              onClose={onMenuClose}
-              idPrefix={'og-export-' + g.label.toLowerCase()}
-            />
-            {g.label === 'Save' && (
-              <div className="og-drive-folder" ref={folderMenuRef}>
-                <input
-                  ref={folderInputRef}
-                  className="og-drive-folder-input"
-                  type="text"
-                  placeholder="Drive folder (optional)"
-                  aria-label="Drive folder path (optional)"
-                  aria-autocomplete="list"
-                  aria-expanded={folderMenuOpen && recentFolders.length > 0}
-                  aria-controls="og-drive-folder-menu"
-                  aria-activedescendant={folderActiveIdx >= 0 ? `og-drive-folder-item-${folderActiveIdx}` : undefined}
-                  value={folderPath}
-                  onChange={(e) => { setFolderPath(e.target.value); setFolderActiveIdx(-1); }}
-                  onFocus={() => setFolderMenuOpen(recentFolders.length > 0)}
-                  onKeyDown={handleFolderKey}
-                  disabled={driveBusy}
-                />
-                {folderMenuOpen && recentFolders.length > 0 && (
-                  <ul
-                    id="og-drive-folder-menu"
-                    className="og-drive-folder-menu"
-                    role="listbox"
-                    aria-label="Recent Drive folders"
-                  >
-                    {recentFolders.map((p, idx) => (
-                      <li key={p} role="presentation">
-                        <button
-                          type="button"
-                          id={`og-drive-folder-item-${idx}`}
-                          role="option"
-                          aria-selected={idx === folderActiveIdx}
-                          className={'og-drive-folder-item' + (idx === folderActiveIdx ? ' is-active' : '')}
-                          onMouseEnter={() => setFolderActiveIdx(idx)}
-                          onClick={() => {
-                            setFolderPath(p);
-                            setFolderMenuOpen(false);
-                            setFolderActiveIdx(-1);
-                          }}
-                        >{p}</button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+    <div className="og-exports" data-testid="og-exports">
+      <div className="og-export-menu" ref={containerRef}>
+        <button
+          ref={buttonRef}
+          type="button"
+          className="og-export-menu-btn og-export-save-btn"
+          aria-haspopup="menu"
+          aria-expanded={pickerOpen}
+          onClick={() => (pickerOpen ? setPickerOpen(false) : setPickerOpen(true))}
+          onKeyDown={onSaveKey}
+          disabled={noContent || processing || running || formats.length === 0}
+          data-testid="og-save-btn"
+        >
+          <span className="og-export-glyph" aria-hidden="true">{running ? '◐' : '↓'}</span>
+          <span>{running ? 'Saving…' : 'Save'}</span>
+          <span className="og-export-menu-caret" aria-hidden="true">▾</span>
+        </button>
+        {pickerOpen && formats.length > 0 && (
+          <PickerList
+            formats={formats}
+            onPick={runFormat}
+            returnFocusTo={buttonRef}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </div>
-
-      {/* Mobile FAB — visible only at ≤880 px via CSS. Tap to native-share, falls
-          back to a bottom sheet that re-uses the 3-menu groups above. */}
       <button
         type="button"
-        className="og-share-fab"
-        aria-label="Share document"
-        data-testid="og-share-fab"
-        onClick={handleNativeShare}
+        className="og-export-btn"
+        onClick={handleCopy}
         disabled={noContent}
+        title="Copy the rendered text or SVG to the clipboard."
       >
-        <span aria-hidden="true">↗</span>
+        <span className="og-export-glyph" aria-hidden="true">{copied ? '✓' : '❐'}</span>
+        <span>{copied ? 'Copied' : 'Copy'}</span>
       </button>
-
-      {mobileSheetOpen && (
-        <div
-          className="og-share-sheet-shroud"
-          onClick={() => setMobileSheetOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Share options"
-        >
-          <div className="og-share-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="og-share-sheet-grip" aria-hidden="true" />
-            {groups.map(g => (
-              <section className="og-share-sheet-group" key={g.label}>
-                <div className="og-share-sheet-label">{g.label}</div>
-                <div className="og-share-sheet-items">
-                  {g.items.map(it => (
-                    <button
-                      key={it.id}
-                      type="button"
-                      className="og-export-btn"
-                      disabled={it.disabled}
-                      onClick={() => {
-                        if (!it.disabled) {
-                          it.onClick();
-                          setMobileSheetOpen(false);
-                        }
-                      }}
-                    >
-                      <span className="og-export-glyph">{it.glyph}</span>
-                      <span>{it.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-            <button
-              type="button"
-              className="og-share-sheet-close"
-              onClick={() => setMobileSheetOpen(false)}
-            >Close</button>
-          </div>
-        </div>
-      )}
-
-      <EmailDialog
-        open={emailOpen}
-        onClose={() => setEmailOpen(false)}
-        onSubmit={submitEmail}
-        busy={emailBusy}
-      />
-
-      <SignatureModal
-        open={signatureOpen}
-        onClose={() => setSignatureOpen(false)}
-        onInsert={handleSignatureInsert}
-      />
-    </>
+      <button
+        type="button"
+        className="og-export-btn"
+        onClick={handlePrint}
+        disabled={noContent}
+        title="Open the browser print dialog. Save as PDF from there for a PDF."
+      >
+        <span className="og-export-glyph" aria-hidden="true">▢</span>
+        <span>Print</span>
+      </button>
+    </div>
   );
 }
 
