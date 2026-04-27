@@ -1,15 +1,48 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post Multi-Sketch Detection sprint)
-**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` (Multi-Sketch Detection)
-**Plan file (prior — Ship Cleanup):** same path, repurposed (see commit history)
+**Last updated:** 2026-04-27 (post Auto-Compile + Multi-SVG Export sprint)
+**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` (originally Multi-Sketch Detection; the Auto-Compile sprint extended it without a separate plan file)
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — Multi-Sketch Detection** first, then the prior passes, then the original plan if you need context.
+Read **Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open** first, then the prior passes, then the original plan if you need context.
 
-## Latest pass — Multi-Sketch Detection (2026-04-27)
+## Latest pass — Per-source Auto-Compiles + Multi-SVG Export + Non-destructive Sketch Open (2026-04-27)
+
+**Why:** Three pain points the Multi-Sketch sprint exposed:
+1. Worksheet compilation was manual cross-source — the user had to drag every block in. With multi-sketch sessions producing N SVGs each, this got tedious fast.
+2. The PNG export only covered the "main" SVG — vectorized sketches in `session.sketches[].svg` had no export path.
+3. Clicking a sketch's **Open** CTA wiped `session.sketches[]`, so the user lost access to the picker (and to every other already-vectorized sketch) the moment they viewed one.
+
+**What shipped (commit `d441f40`):**
+
+| Layer | Change | Files |
+|---|---|---|
+| Compile schema | Bumped to **v3**. Every compile now has a `sourceId` (`null` = manual cross-source, session-id = auto-managed). Every block has a `role` (`'manual'` or one of the `auto:*` tags). New `syncAutoBlocks(compile, session)` reconciles auto blocks from a session snapshot — replaces text/refinements/main-svg/images in place, **preserves every distinct vectorized sketch as its own block**, never touches manual blocks, never overwrites user drag-reorders. | `src/compile.js` |
+| Sync triggers | `syncAutoBlocks` runs on every extraction completion: `runAction`, `vectorizeSketch` (uses prev-from-updater so the `vectorizeAllSketches` loop always syncs against the freshest state, not a stale closure), the queue runner, `openSketch`, and the new `showAllSketches`. | `src/App.jsx` |
+| Compile palette UX | Worksheet button on a source opens **that source's auto-compile** (creates one if missing). Compiles cascade-delete when the underlying session is deleted. Palette splits **By source** (with auto badge) from **Manual**. | `src/components/CompilePalette.jsx`, `src/App.jsx` |
+| Multi-SVG raster export | `exportPNG` generalized to `exportRaster(svg, { format, filename, quality })` — supports both PNG and JPG. New `src/svgExports.js` module deduplicates main vs. focused-sketch SVG. UI shows **All as PNG (N)** / **All as JPG (N)** when N > 1; sequential downloads with a 60ms breather to dodge Chromium's same-name dedup. No mosaic, no resize. | `src/components/ExportBar.jsx`, `src/svgExports.js` (NEW) |
+| Non-destructive sketch open | `openSketch` no longer wipes `session.sketches[]` when promoting a sketch to the main canvas. New **← Show all sketches (N)** link in the focused-view header (rendered when `session.sketches.length > 0` even if `session.svg` is set) returns the user to the picker without losing any vectorized SVGs. | `src/App.jsx`, `src/components/OutputColumn.jsx`, `src/index.css` |
+| Tests | 14 new `compile.test.js` cases (v3 schema, sync semantics, multi-SVG preservation, drag-reorder survival, sequential-vectorize regression). 7 new `rasterExport.test.js` cases (dedup logic). | `src/__tests__/compile.test.js`, `src/__tests__/rasterExport.test.js`, `src/__tests__/compile-idb.test.js` (touched for v3 fixture) |
+
+**Verification:**
+- `npm run lint` → exits 0.
+- `npm test` → **204/204 passing** (was 182/182; +21 new compile + raster tests, -1 net for fixture cleanup).
+- `npm run build` → clean.
+- `/api/_status` continues to report `gemini=real, docx=real`.
+
+**Notable subtlety:** `vectorizeSketch` reads its session from the prev-from-updater pattern (`setSessions(prev => ...)`) instead of a closure-captured snapshot. This is what lets `vectorizeAllSketches`'s sequential loop sync the auto-compile against the FRESHEST state after every per-card vectorize. The previous closure-based read would have synced against stale sketches[] from the start of the loop.
+
+**Manual smoke matrix (still owed by user on http://192.168.1.13:5181):**
+- A. Single-session worksheet auto-create — extract text, click Worksheet on the source → auto-compile opens, contains an `auto:text` block with the extracted text. Re-run extraction → block updates in place (no duplicate).
+- B. Multi-sketch auto-blocks — detect 3 sketches, vectorize all → auto-compile shows 3 distinct `auto:sketch` blocks (one per vectorized SVG). Drag-reorder them → re-vectorize one → reorder survives.
+- C. Manual + auto cohabitation — open auto-compile, drag in a block from another source → marks `role: 'manual'`. Re-run extraction on the auto-source → manual block survives, auto blocks update.
+- D. Cascade delete — delete the source session → its auto-compile is gone too, manual cross-source compiles untouched.
+- E. Multi-SVG export — vectorize 3 sketches, click ExportBar → "All as PNG (4)" appears (3 sketches + main view if it has its own SVG, deduped). Each downloads with its own filename.
+- F. Non-destructive open — vectorize sketch #2, click Open → main canvas shows sketch 2's SVG, **Show all sketches (3)** link in the header → click → back to picker with all 3 cards intact (sketch 2 still marked `done`).
+
+## Prior pass — Multi-Sketch Detection (2026-04-27)
 
 **Why:** Real teaching documents often contain several sketches per page. The old `/api/sketch-to-svg` returned ONE SVG, leaving the user to re-upload or manually crop for each additional diagram. This pass lets Gemini detect every sketch in the upload, surface a picker, and lazy-vectorize each on demand — preserving the back-compat single-sketch UX.
 
@@ -20,7 +53,7 @@ Read **Latest pass — Multi-Sketch Detection** first, then the prior passes, th
 | Server | `/api/sketch-to-svg` now polymorphic on `req.body.bbox`. **Discovery mode** (no bbox): JSON-mode prompt asks Gemini for every sketch in the doc, returns `{sketches:[{id, description, bbox, page, thumbnail?}]}` for 2+, falls through to vectorize for 1, errors `OCR_NO_SKETCH_FOUND` for 0. **Vectorize mode** (bbox present): crops via sharp (images) or hints prompt with bbox+page (PDFs), returns `{svg}`. | `server/index.js` |
 | Errors | New codes `OCR_NO_SKETCH_FOUND` (404, INFO) and `OCR_SKETCH_BBOX_INVALID` (400, ERROR) registered on both server and client. | `server/errors.js`, `src/errors/codes.js` |
 | Schema | Bumped `SESSION_SCHEMA_VERSION` 4 → 5. New optional fields: `sketches: [{id, description, bbox, page, thumbnail?, svg, status}]` and `selectedSketchId`. Migration is a no-op stamp (fields default undefined). | `src/App.jsx` |
-| State | New 4th branch in `runAction` + queue runner for `data.sketches`: stores candidates with `status: 'pending'`, seeds `selectedSketchId` to first card. New helpers `vectorizeSketch(id)`, `vectorizeAllSketches()` (sequential), `openSketch(id)` (promotes a vectorized sketch to the main canvas). | `src/App.jsx` |
+| State | New 4th branch in `runAction` + queue runner for `data.sketches`: stores candidates with `status: 'pending'`, seeds `selectedSketchId` to first card. New helpers `vectorizeSketch(id)`, `vectorizeAllSketches()` (sequential), `openSketch(id)` (promotes a vectorized sketch to the main canvas — note: as of the next sprint this is **non-destructive** and `session.sketches[]` survives so the picker stays accessible). | `src/App.jsx` |
 | UI | New conditional **Sketches (N)** pill in the Output column (rendered only when `session.sketches.length > 0`); auto-flips mode to `sketches` when a session FIRST acquires sketches; falls back to Preview if the user switches sessions. New `SketchesPicker` component renders cards with thumbnail (or placeholder for PDFs), description, page tag, status badge ('Vectorize' button → spinner → inline SVG preview → 'Open' CTA). Toolbar hosts "Vectorize All (N left)". | `src/components/OutputColumn.jsx`, `src/components/SketchesPicker.jsx` (NEW), `src/index.css` |
 | Copy | Sketch action hint changed from "Hand drawing → editable SVG" to "Detect & vectorize sketches" so users know it now handles multiple. | `src/magicActions.js` |
 | Tests | 12 new tests — 7 backend (discovery 0/1/2+, vectorize-with-bbox, bad-bbox in 3 forms) + 5 frontend (picker render, Vectorize click, Open click + SVG preview, Vectorize-All disabled-state, empty list). Total 170 → 182 passing. | `src/__tests__/smoke/sketch-and-images.test.js`, `src/__tests__/smoke/server.fixture.js` (mirrored prod logic), `src/__tests__/smoke/client-output.test.jsx` |
