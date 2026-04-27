@@ -522,6 +522,25 @@ kbd, code { font-family: var(--mono); }
   grid-template-columns: auto 1fr;
 }
 
+/* Track P §3.9 — Action-tile tier prioritization. MagicActions.jsx tags
+   each tile with `data-tier="primary|secondary|tertiary"`. Primary tiles
+   read slightly brighter (tinted background) so the user's eye lands on
+   them first; tertiary tiles dim down with a softer border + faded ink
+   so they recede. Reuses existing tokens — no new design tokens. */
+.og-tile[data-tier="primary"] {
+  background: var(--bg-tint);
+}
+.og-tile[data-tier="secondary"] {
+  /* default look — uses the base .og-tile rule */
+}
+.og-tile[data-tier="tertiary"] {
+  border-color: var(--rule-soft);
+  background: var(--bg-card);
+}
+.og-tile[data-tier="tertiary"] .og-tile-label,
+.og-tile[data-tier="tertiary"] .og-tile-glyph { color: var(--ink-soft); }
+.og-tile[data-tier="tertiary"] .og-tile-hint { color: var(--ink-faint); }
+
 /* ===================================================================
    Refinement tabs (Refine pill view)
    =================================================================== */
@@ -2921,6 +2940,73 @@ kbd, code { font-family: var(--mono); }
 }
 @media (max-width: 880px) {
   .og-mermaid-editor { grid-template-columns: 1fr; }
+}
+
+/* Track P (S3 carryover from Track L) — Equation live-editor split layout.
+   Mirrors `.og-mermaid-editor` block-for-block: LaTeX source on the left,
+   KaTeX-rendered preview on the right; collapses to stacked rows ≤880px.
+   Same padding/border/font tokens as the mermaid block by design — no
+   new design tokens introduced. */
+.og-rendered--equation { max-width: none; padding: 0; }
+.og-equation-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-height: 360px;
+  align-items: stretch;
+}
+.og-equation-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  padding: 12px;
+  min-width: 0;
+}
+.og-equation-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.og-equation-textarea {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg-deep);
+  border: 1px solid var(--rule);
+  padding: 10px;
+  resize: vertical;
+  min-height: 240px;
+}
+.og-equation-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.og-equation-preview {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  background: var(--bg-deep);
+  border: 1px solid var(--rule);
+  padding: 12px;
+  overflow: auto;
+  min-height: 240px;
+}
+.og-equation-preview .katex,
+.og-equation-preview .katex-display { max-width: 100%; }
+.og-equation-preview--empty {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
+@media (max-width: 880px) {
+  .og-equation-editor { grid-template-columns: 1fr; }
 }
 
 /* ===================================================================
