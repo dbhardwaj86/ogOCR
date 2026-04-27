@@ -1,10 +1,11 @@
 /* ===================================================================
    ogOCR — "Optical Instrument" theme
    Themes: paper (default), sepia, ink
-   Fonts: Instrument Serif + JetBrains Mono only; sans falls back to system.
+   Fonts: STIX Two Text (textbook serif, harmonizes with KaTeX math)
+          + JetBrains Mono. Sans falls back to system.
    =================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=STIX+Two+Text:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
   /* paper (default) — Variant B "Refined" cool indigo */
@@ -24,7 +25,7 @@
 
   --stage-gradient: radial-gradient(circle at 30% 20%, oklch(0.97 0.01 245) 0%, transparent 60%);
 
-  --serif:  'Fraunces', Georgia, serif;
+  --serif:  'STIX Two Text', 'Source Serif 4', Charter, Cambria, Georgia, serif;
   --sans:   system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --mono:   'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
@@ -622,7 +623,14 @@ kbd, code { font-family: var(--mono); }
   min-height: 0;
   min-width: 0;
 }
-.og-rendered { min-width: 0; max-width: 680px; margin: 0 auto; color: var(--ink); }
+.og-rendered {
+  min-width: 0; max-width: 680px; margin: 0 auto; color: var(--ink);
+  /* Textbook serif as the inherited default for the entire rendered article.
+     Headings, lists, blockquotes pick this up; code blocks + h3 eyebrow
+     explicitly override to mono. */
+  font-family: var(--serif);
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "onum" 1;
+}
 .og-rendered-runner {
   display: flex; gap: 8px;
   font-family: var(--mono); font-size: 10px;
@@ -672,12 +680,25 @@ kbd, code { font-family: var(--mono); }
   margin: 20px 0 8px;
 }
 .og-rendered .og-p {
-  font-size: var(--user-font-size);
-  line-height: 1.65; color: var(--ink); margin: 0 0 12px;
+  font-size: calc(var(--user-font-size) + 2px);
+  line-height: 1.7; color: var(--ink); margin: 0 0 14px;
   text-wrap: pretty;
+  /* Textbook typography: kerning, ligatures, old-style figures, contextual alts.
+     STIX Two Text exposes oldstyle nums via `onum`; falls back gracefully. */
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "onum" 1;
+  hanging-punctuation: first last;
 }
 .og-rendered .og-p strong { font-weight: 600; }
 .og-rendered .og-p em { font-family: var(--serif); font-style: italic; }
+/* KaTeX inline + display math harmonization: scale up slightly so math
+   matches textbook proportions next to STIX Two Text body. KaTeX ships its
+   own math fonts (Computer Modern style) — leave font-family alone. */
+.og-rendered .katex { font-size: 1.05em; }
+.og-rendered .katex-display { margin: 1em 0; padding: 0 0.25em; overflow-x: auto; overflow-y: hidden; }
+.og-rendered .katex-display > .katex { font-size: 1.12em; }
+/* Subscripts/superscripts in inline math sometimes touch the line above —
+   slightly more line-height in paragraphs containing math. */
+.og-rendered .og-p:has(.katex) { line-height: 1.85; }
 .og-rendered .og-ul, .og-rendered .og-ol { margin: 0 0 14px 18px; padding: 0; }
 .og-rendered .og-ul li, .og-rendered .og-ol li {
   margin: 4px 0; line-height: 1.6; padding-left: 6px;

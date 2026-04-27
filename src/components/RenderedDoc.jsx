@@ -4,6 +4,10 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+// mhchem: enables \ce{...} for chemical equations and \pu{...} for physical
+// units inside KaTeX. Side-effect import — registers macros on the global
+// KaTeX instance that rehype-katex uses below. Required for OCR'd chemistry.
+import 'katex/contrib/mhchem';
 import { sanitizeSvg } from '../svgSanitize';
 import { stripDetectedLang } from '../magicActions';
 import { ERRORS } from '../errors/codes';
@@ -225,7 +229,25 @@ function RenderedDoc({ text, svg, images, mode, onChangeText }) {
       {hasText && (
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: '#cc0000' }]]}
+          rehypePlugins={[[rehypeKatex, {
+            throwOnError: false,
+            errorColor: '#cc0000',
+            strict: 'ignore',
+            trust: true,
+            // Common physics / textbook shortcuts so OCR output that uses
+            // informal notation still renders. Add more as Gemini's output
+            // patterns reveal them.
+            macros: {
+              '\\R': '\\mathbb{R}',
+              '\\N': '\\mathbb{N}',
+              '\\Z': '\\mathbb{Z}',
+              '\\Q': '\\mathbb{Q}',
+              '\\C': '\\mathbb{C}',
+              '\\vec': '\\mathbf{#1}',
+              '\\unit': '\\,\\mathrm{#1}',
+              '\\degree': '^{\\circ}',
+            },
+          }]]}
           components={mdComponents}
         >
           {cleanText}
