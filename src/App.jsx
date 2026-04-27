@@ -12,7 +12,6 @@ import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ErrorBoundary from './components/ErrorBoundary';
-import { publishLanguageOverrides } from './components/LanguagePill';
 import { MAGIC_ACTIONS, REFINE_ACTIONS, REFINE_KIND_BY_ID, LANGUAGE_OVERRIDE_PROMPT } from './magicActions';
 import { showError, installErrorSinks, showInfo } from './errors/showError';
 import { errFromResponse, errFromException } from './errors/errFromResponse';
@@ -247,18 +246,6 @@ function App() {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('ogOCR_theme', theme); } catch { /* ignore */ }
   }, [theme]);
-
-  // Track K — broadcast the per-session language overrides so LanguagePill
-  // (mounted by SourceColumn, which doesn't forward arbitrary props) can
-  // render the `(override)` suffix accurately. The publication is just a
-  // module-level signal store inside LanguagePill.jsx, not a global event.
-  useEffect(() => {
-    const map = {};
-    for (const s of sessions) {
-      if (s?.id && s?.languageOverride) map[s.id] = s.languageOverride;
-    }
-    publishLanguageOverrides({ activeSessionId, map });
-  }, [sessions, activeSessionId]);
 
   // One-shot migration of legacy v3 sessions: any image entry whose `data`
   // is still a `data:` URL (left over from before v4) gets lifted into IDB
@@ -1118,51 +1105,46 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [runAction]);
 
-  // Track K — language override re-run hook. LanguagePill (mounted by
-  // SourceColumn — Track I's owned file, not editable here) dispatches a
-  // window-level `og:language-override` CustomEvent when the user picks a
-  // language. We re-run the active session's last action with the override
-  // wrapped around the prompt. The pill records the override on the
-  // session via `runAction`'s `languageOverride` option so a reload keeps
-  // the chip in `(override)` mode.
+  // Track R — language override re-run callback. SourceColumn forwards
+  // this directly to LanguagePill via the `onOverride` prop. We resolve
+  // the target session (defaulting to the currently active one), persist
+  // the override on the session, and re-run the most-recent magic action
+  // with the override wrapped around the base prompt.
   //
-  // Why a custom event instead of a prop chain: SourceColumn's render of
-  // `<LanguagePill lang={detectedLang} />` doesn't forward arbitrary
-  // props, and Track K's owned-file list explicitly excludes editing
-  // SourceColumn (Track I owns it). The event hop is a one-line workaround
-  // that keeps the contract honest: when SourceColumn does forward props
-  // in a future track, LanguagePill already accepts an `onOverride` prop
-  // that takes precedence over the event.
-  useEffect(() => {
-    const onOverride = (ev) => {
-      const lang = ev?.detail?.lang;
-      if (!lang) return;
-      // Use the requested sessionId when present so a click on a pill bound
-      // to a stale session can't misroute the re-run; fall back to the
-      // currently active session.
-      const requestedId = ev?.detail?.sessionId || activeSessionId;
-      const target = sessions.find(s => s.id === requestedId);
-      if (!target) return;
-      // Determine the action to re-run: prefer the session's recorded
-      // `kind` (set after the last successful magic-action run); fall back
-      // to `text` so a fresh session with no kind still works.
-      const actionId = target.kind && MAGIC_ACTIONS.some(a => a.id === target.kind)
-        ? target.kind
-        : 'text';
-      // Move focus to the target session if needed so `runAction` operates
-      // on the right state. `runAction` reads `activeSession` for the refine
-      // path; the magic-action path reads `file`, which the user uploaded
-      // for this session.
-      if (requestedId !== activeSessionId) {
-        setActiveSessionId(requestedId);
-      }
-      // Persist the override immediately (so the chip flips to `(override)`
-      // even before the re-run lands) and fire the action with the wrap.
-      updateSession(requestedId, { languageOverride: lang === 'auto' ? null : lang });
+  // Track K shipped this via a window-level `og:language-override` event
+  // because SourceColumn wasn't editable then. With direct props, that
+  // workaround is gone — see Track R.
+  const handleLanguageOverride = useCallback((lang, requestedSessionId) => {
+    if (!lang) return;
+    // Use the requested sessionId when present so a click on a pill bound
+    // to a stale session can't misroute the re-run; fall back to the
+    // currently active session.
+    const requestedId = requestedSessionId || activeSessionId;
+    const target = sessions.find(s => s.id === requestedId);
+    if (!target) return;
+    // Determine the action to re-run: prefer the session's recorded
+    // `kind` (set after the last successful magic-action run); fall back
+    // to `text` so a fresh session with no kind still works.
+    const actionId = target.kind && MAGIC_ACTIONS.some(a => a.id === target.kind)
+      ? target.kind
+      : 'text';
+    // Move focus to the target session if needed so `runAction` operates
+    // on the right state. `runAction` reads `activeSession` for the refine
+    // path; the magic-action path reads `file`, which the user uploaded
+    // for this session.
+    if (requestedId !== activeSessionId) {
+      setActiveSessionId(requestedId);
+    }
+    // Persist the override immediately (so the chip flips to `(override)`
+    // even before the re-run lands) and fire the action with the wrap.
+    // `auto` clears the override and re-runs the base prompt.
+    if (lang === 'auto') {
+      updateSession(requestedId, { languageOverride: null });
+      runAction(actionId);
+    } else {
+      updateSession(requestedId, { languageOverride: lang });
       runAction(actionId, undefined, { languageOverride: lang });
-    };
-    window.addEventListener('og:language-override', onOverride);
-    return () => window.removeEventListener('og:language-override', onOverride);
+    }
   }, [activeSessionId, sessions, runAction, updateSession]);
 
   const cancelRunning = useCallback(() => {
@@ -1274,6 +1256,7 @@ function App() {
           processing={processing}
           onRun={runAction}
           onUpdateSession={(updates) => activeSessionId && updateSession(activeSessionId, updates)}
+          onLanguageOverride={handleLanguageOverride}
         />
         <ErrorBoundary>
           <OutputColumn

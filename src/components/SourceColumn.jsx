@@ -6,7 +6,7 @@ import SignatureModal from './SignatureModal';
 import { showInfo } from '../errors/showError';
 import { parseDetectedLang } from '../magicActions';
 
-function SourceColumn({ session, file, processing, onRun, onUpdateSession }) {
+function SourceColumn({ session, file, processing, onRun, onUpdateSession, onLanguageOverride }) {
   const [signOpen, setSignOpen] = useState(false);
 
   if (!session && !file) {
@@ -46,7 +46,12 @@ function SourceColumn({ session, file, processing, onRun, onUpdateSession }) {
           <span className="og-source-name">{nameLabel}</span>
         </div>
         <div className="og-source-head-actions">
-          <LanguagePill lang={detectedLang} />
+          <LanguagePill
+            lang={detectedLang}
+            overrideLang={session?.languageOverride}
+            sessionId={session?.id}
+            onOverride={onLanguageOverride}
+          />
           <button
             type="button"
             className="og-pill og-pill-secondary og-source-sign-btn"
