@@ -46,12 +46,9 @@ const TIMEOUT_MARKER = 'Gemini request timed out';
 // server should reject obvious garbage (text/plain, application/zip,
 // application/x-msdownload renamed to .png) without rejecting valid image
 // types the client happily accepts (image/jpg from older browsers,
-// image/heic from iPhones, image/gif, image/bmp). The /api/extract-images
-// route still needs the stricter allowlist because sharp can only crop a
-// known subset.
+// image/heic from iPhones, image/gif, image/bmp).
 const ALLOWED_INPUT_RE = /^(image\/|application\/pdf$)/;
 function isAllowedInputMime(mime) { return typeof mime === 'string' && ALLOWED_INPUT_RE.test(mime); }
-const ALLOWED_EXTRACT_IMAGES_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // CORS: allow loopback + RFC 1918 LAN ranges + .local mDNS hostnames by default.
@@ -748,103 +745,6 @@ app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.any(), a
   } catch (error) {
     console.error('Sketch to SVG Error:', error);
     sendModelError(res, error, 'Failed to convert sketch to SVG');
-  }
-});
-
-app.post('/api/extract-images', ocrLimiter, uploadSemaphore, uploadArray.any(), async (req, res) => {
-  try {
-    const file = pickUploadedFile(req);
-    if (!file) return sendError(res, 'CAP_NO_FILE');
-    if (file.size === 0) return sendError(res, 'CAP_NO_FILE', { message: 'File is empty.' });
-    if (!ALLOWED_EXTRACT_IMAGES_MIMES.includes(file.mimetype)) {
-      return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type for image extraction.' });
-    }
-
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-pro",
-      generationConfig: { responseMimeType: "application/json" }
-    });
-
-    const prompt = `Identify all distinct diagrams, charts, pictures, or major visual components in this document.
-    Return a JSON array of objects. Each object must have:
-    - "description": A short description of the image.
-    - "boundingBox": An array of 4 numbers [ymin, xmin, ymax, xmax] representing the normalized bounding box coordinates where values are between 0 and 1000.`;
-
-    const result = await generateContentFromUpload(model, prompt, file);
-    let jsonText = (await result.response).text();
-    jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
-
-    let raw;
-    try {
-      raw = JSON.parse(jsonText);
-    } catch {
-      console.error("Failed to parse Gemini JSON. First 200 chars:", jsonText.substring(0, 200));
-      return sendError(res, 'OCR_MALFORMED_JSON');
-    }
-
-    if (!Array.isArray(raw)) {
-      console.error("Gemini did not return an array, got:", typeof raw);
-      return sendError(res, 'OCR_MALFORMED_JSON', { message: 'Model did not return an array.' });
-    }
-
-    const boxes = raw.filter(b =>
-      b && typeof b.description === 'string' &&
-      Array.isArray(b.boundingBox) && b.boundingBox.length === 4 &&
-      b.boundingBox.every(n => typeof n === 'number' && n >= 0 && n <= 1000) &&
-      b.boundingBox[2] > b.boundingBox[0] &&
-      b.boundingBox[3] > b.boundingBox[1]
-    );
-
-    const extractedImages = [];
-
-    if (file.mimetype.startsWith('image/')) {
-      const metadata = await sharp(file.buffer).metadata();
-      const { width, height } = metadata;
-
-      for (let i = 0; i < boxes.length; i++) {
-        const box = boxes[i].boundingBox;
-        const ymin = box[0] / 1000;
-        const xmin = box[1] / 1000;
-        const ymax = box[2] / 1000;
-        const xmax = box[3] / 1000;
-
-        const left = Math.max(0, Math.floor(xmin * width));
-        const top = Math.max(0, Math.floor(ymin * height));
-        const extractWidth = Math.min(width - left, Math.floor((xmax - xmin) * width));
-        const extractHeight = Math.min(height - top, Math.floor((ymax - ymin) * height));
-
-        if (extractWidth > 0 && extractHeight > 0) {
-          try {
-            const croppedBuffer = await sharp(file.buffer)
-              .extract({ left, top, width: extractWidth, height: extractHeight })
-              .png()
-              .toBuffer();
-
-            extractedImages.push({
-              id: i + 1,
-              desc: boxes[i].description,
-              data: `data:image/png;base64,${croppedBuffer.toString('base64')}`
-            });
-          } catch (cropErr) {
-            console.error(`Crop ${i + 1} failed:`, cropErr.message);
-          }
-        }
-      }
-    } else {
-      // PDF: descriptions only — no per-page rasterization yet.
-      boxes.forEach((box, i) => {
-        extractedImages.push({
-          id: i + 1,
-          desc: box.description + ` (Bounding Box: ${box.boundingBox.join(', ')})`,
-          data: null
-        });
-      });
-    }
-
-    res.json({ success: true, images: extractedImages, message: `Found ${boxes.length} visual components.` });
-  } catch (error) {
-    console.error("Extract Images Error:", error);
-    sendModelError(res, error, 'Failed to extract images');
   }
 });
 

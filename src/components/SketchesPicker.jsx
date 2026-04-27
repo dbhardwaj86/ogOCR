@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { sanitizeSvg } from '../svgSanitize';
 
 /**
@@ -30,14 +29,17 @@ function SketchesPicker({
   onSelect,
   onVectorize,
   onVectorizeAll,
+  onCancelBatch,
   onOpen,
   anyRunning,
+  batchActive,
 }) {
-  const [batchHover, setBatchHover] = useState(false);
   if (!Array.isArray(sketches) || sketches.length === 0) return null;
 
   const doneCount = sketches.filter(s => s.status === 'done').length;
+  const remaining = sketches.length - doneCount;
   const allDone = doneCount === sketches.length;
+  const showStop = batchActive && !allDone;
 
   return (
     <article className="og-rendered og-rendered--sketches">
@@ -45,25 +47,34 @@ function SketchesPicker({
         <span className="og-sketches-runner">
           OG·OCR · DETECTED · {sketches.length} SKETCH{sketches.length === 1 ? '' : 'ES'}
         </span>
-        <button
-          type="button"
-          className="og-btn-ghost og-sketches-batch"
-          onClick={onVectorizeAll}
-          disabled={anyRunning || allDone}
-          title={allDone
-            ? 'All sketches vectorized.'
-            : anyRunning
-              ? 'A sketch is currently being vectorized…'
-              : `Vectorize all ${sketches.length} sketches sequentially. May take ~${sketches.length * 20}–${sketches.length * 45}s.`}
-          onMouseEnter={() => setBatchHover(true)}
-          onMouseLeave={() => setBatchHover(false)}
-        >
-          {allDone ? 'All vectorized' : `Vectorize All (${sketches.length - doneCount} left)`}
-        </button>
+        {showStop ? (
+          <button
+            type="button"
+            className="og-btn-ghost og-sketches-batch og-sketches-batch--stop"
+            onClick={onCancelBatch}
+            title="Stop the batch — already-finished sketches stay vectorized."
+          >
+            Stop ({remaining} left)
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="og-btn-ghost og-sketches-batch"
+            onClick={onVectorizeAll}
+            disabled={anyRunning || allDone}
+            title={allDone
+              ? 'All sketches vectorized.'
+              : anyRunning
+                ? 'A sketch is currently being vectorized…'
+                : `Vectorize all ${sketches.length} sketches sequentially. Click Stop on the processing strip or here to interrupt.`}
+          >
+            {allDone ? 'All vectorized' : `Vectorize All (${remaining} left)`}
+          </button>
+        )}
       </div>
       <p className="og-sketches-help">
-        {batchHover && !allDone && !anyRunning
-          ? `Runs sequentially through every pending sketch. Cancel by switching tabs or refreshing.`
+        {showStop
+          ? `Vectorizing ${doneCount + 1} of ${sketches.length} — click Stop to halt the queue. Anything already vectorized stays.`
           : `Click a card to focus it, then "Vectorize" to convert it to a clean SVG. Originals come from the upload — re-upload to re-detect.`}
       </p>
       <div className="og-sketches-grid" role="list">

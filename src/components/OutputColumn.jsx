@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import RenderedDoc, { detectMermaidBlock } from './RenderedDoc';
+import RenderedDoc from './RenderedDoc';
 import SketchesPicker from './SketchesPicker';
 import SourceDoc from './SourceDoc';
 import ProcessingStrip from './ProcessingStrip';
 import ExportBar from './ExportBar';
 import PromptDock from './PromptDock';
 import InlineError from './InlineError';
-import RefinementTabs from './RefinementTabs';
-import { KIND_LABEL, REFINE_ACTIONS } from '../magicActions';
+import { KIND_LABEL } from '../magicActions';
 
 // Inline rename input — extracted so a `key` on this component (the session
 // id + persisted exportName) cleanly resets local draft state when the active
@@ -15,13 +14,40 @@ import { KIND_LABEL, REFINE_ACTIONS } from '../magicActions';
 // anti-pattern (forbidden by react-hooks/set-state-in-effect).
 function RenameInput({ initialValue, fallback, ariaLabel, onCommit }) {
   const [draft, setDraft] = useState(initialValue);
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef(null);
   const commit = () => {
     const trimmed = draft.trim();
+    setEditing(false);
     if (trimmed === initialValue) return;
     onCommit(trimmed);
   };
+  // Show as a clickable display with a pencil affordance until the user
+  // engages it; expand to a real input only on click. Keeps the title bar
+  // tidy while making the rename action discoverable.
+  if (!editing) {
+    const display = initialValue?.trim() ? initialValue : (fallback || 'Rename for export');
+    const isPlaceholder = !initialValue?.trim();
+    return (
+      <button
+        type="button"
+        className={'og-output-rename-display' + (isPlaceholder ? ' is-placeholder' : '')}
+        onClick={() => {
+          setEditing(true);
+          // Focus the input next tick after it mounts.
+          setTimeout(() => inputRef.current?.focus(), 0);
+        }}
+        aria-label={ariaLabel}
+        title="Click to rename for export"
+      >
+        <span className="og-output-rename-text">{display}</span>
+        <span className="og-output-rename-pencil" aria-hidden="true">✎</span>
+      </button>
+    );
+  }
   return (
     <input
+      ref={inputRef}
       type="text"
       className="og-output-rename"
       placeholder={fallback || 'Rename for export'}
@@ -36,6 +62,7 @@ function RenameInput({ initialValue, fallback, ariaLabel, onCommit }) {
           e.currentTarget.blur();
         } else if (e.key === 'Escape') {
           setDraft(initialValue);
+          setEditing(false);
           e.currentTarget.blur();
         }
       }}
@@ -59,10 +86,11 @@ function OutputColumn({
   onDismissError,
   onVectorizeSketch,
   onVectorizeAllSketches,
+  onCancelBatch,
   onOpenSketch,
   onShowAllSketches,
 }) {
-  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation' | 'sketches'
+  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'equation' | 'sketches'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -97,21 +125,6 @@ function OutputColumn({
   };
 
   const lastError = session?.lastError && !processing ? session.lastError : null;
-
-  // Refine pill is hidden until at least one refinement key is populated.
-  const refinements = session?.refinements || null;
-  const populatedRefineKinds = refinements
-    ? REFINE_ACTIONS.map(a => a.kind).filter(k => typeof refinements[k] === 'string' && refinements[k].trim())
-    : [];
-  const hasRefinements = populatedRefineKinds.length > 0;
-
-  // Sprint 2.8a — Diagram pill is conditional: shown when the session is
-  // explicitly mermaid-kind, or when the extracted text contains a fenced
-  // ```mermaid block. Both conditions are checked because (a) free-form
-  // prompts can return mermaid without setting kind, and (b) the mermaid
-  // action sets kind but the text still wraps the code in a fence.
-  const hasMermaid =
-    session?.kind === 'mermaid' || !!detectMermaidBlock(session?.text);
 
   // Sprint 3.1 — Equation pill is conditional: visible only when the
   // session was produced by the `Math to LaTeX` action. We do not sniff the
@@ -168,13 +181,9 @@ function OutputColumn({
     }
   }, [session?.id, session?.selectedSketchId, session?.svg]);
 
-  // If the user picked the Refine pill but the session no longer has any
-  // populated refinements (e.g. switched sessions), fall back to Preview.
-  // Same idea for Diagram / Equation / Sketches: if the active session no
-  // longer qualifies, drop back to Preview rather than rendering empty UI.
+  // Fall back to Preview when the active session no longer qualifies for
+  // the chosen pill (e.g. switched sessions).
   let effectiveMode = mode;
-  if (effectiveMode === 'refine' && !hasRefinements) effectiveMode = 'rendered';
-  if (effectiveMode === 'diagram' && !hasMermaid) effectiveMode = 'rendered';
   if (effectiveMode === 'equation' && !hasEquation) effectiveMode = 'rendered';
   if (effectiveMode === 'sketches' && !hasSketches) effectiveMode = 'rendered';
 
@@ -204,21 +213,7 @@ function OutputColumn({
           <button
             className={'og-pill' + (effectiveMode === 'source' ? ' is-active' : '')}
             onClick={() => setMode('source')}
-          >Markdown</button>
-          {hasRefinements && (
-            <button
-              className={'og-pill' + (effectiveMode === 'refine' ? ' is-active' : '')}
-              onClick={() => setMode('refine')}
-              title="View AI-refined versions of this document"
-            >Refine</button>
-          )}
-          {hasMermaid && (
-            <button
-              className={'og-pill og-pill-diagram' + (effectiveMode === 'diagram' ? ' is-active' : '')}
-              onClick={() => setMode('diagram')}
-              title="Open the Mermaid live editor for this diagram"
-            >Diagram</button>
-          )}
+          >Source</button>
           {hasEquation && (
             <button
               className={'og-pill og-pill-equation' + (effectiveMode === 'equation' ? ' is-active' : '')}
@@ -233,16 +228,17 @@ function OutputColumn({
               title="Pick a detected sketch to vectorize"
             >Sketches ({session.sketches.length})</button>
           )}
+        </div>
+        <div className="og-output-tools">
           <button
-            className="og-pill og-pill-secondary"
+            type="button"
+            className="og-output-worksheet-btn"
             onClick={onCompile}
-            // v3 — every source has its own auto-compiled worksheet that
-            // grows as the user extracts more outputs from it. The pill is
-            // useful from session #1, so the old `sessionCount < 2` dim
-            // treatment is gone. Cross-source manual compiles still work
-            // through the same button via the palette.
             title="Open this source's auto-compiled worksheet — every extracted output appended automatically."
-          >Worksheet</button>
+          >
+            <span className="og-output-worksheet-glyph" aria-hidden="true">▤</span>
+            <span>Worksheet</span>
+          </button>
         </div>
       </div>
 
@@ -311,9 +307,9 @@ function OutputColumn({
       <div className="og-output-canvas">
         {/* "Show all sketches" chip — visible whenever a focused sketch is
            open (session.svg) and at least one sketch lives behind it. Not
-           gated on mode: even from Source / Markdown views, the user
-           should be one click from the picker. Pending count surfaces
-           in-flight vectorizes from the focused view. */}
+           gated on mode: even from Source view, the user should be one
+           click from the picker. Pending count surfaces in-flight
+           vectorizes from the focused view. */}
         {session?.svg
           && Array.isArray(session?.sketches)
           && session.sketches.length >= 1
@@ -346,12 +342,6 @@ function OutputColumn({
             disabled={!!processing || !session}
           />
         )}
-        {effectiveMode === 'refine' && (
-          <RefinementTabs refinements={refinements} populatedKinds={populatedRefineKinds} />
-        )}
-        {effectiveMode === 'diagram' && (
-          <RenderedDoc text={session?.text} svg={session?.svg} images={session?.images} mode="diagram" />
-        )}
         {effectiveMode === 'equation' && (
           <RenderedDoc
             text={session?.text}
@@ -368,14 +358,16 @@ function OutputColumn({
             onSelect={(id) => onUpdateSession && onUpdateSession({ selectedSketchId: id })}
             onVectorize={onVectorizeSketch}
             onVectorizeAll={onVectorizeAllSketches}
+            onCancelBatch={onCancelBatch}
             onOpen={onOpenSketch}
             anyRunning={(session?.sketches || []).some(s => s.status === 'running')}
+            batchActive={processing?.actionId === 'sketch-batch'}
           />
         )}
       </div>
 
       <div className="og-output-foot">
-        <ExportBar session={session} onShowToast={onShowToast} processing={!!processing} />
+        <ExportBar session={session} file={file} onShowToast={onShowToast} processing={!!processing} />
       </div>
     </section>
   );

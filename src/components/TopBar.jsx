@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import CornerBracket from './CornerBracket';
 import MockBadge from './MockBadge';
 import { NEXT_THEME, THEME_LABELS } from '../theme';
+import { modKeyLabel } from '../platform';
 
 function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen, onDiagnosticsOpen }) {
   const [time, setTime] = useState(() => new Date());
@@ -62,7 +63,7 @@ function TopBar({ activeSession, theme, onThemeCycle, onPaletteOpen, onDiagnosti
           onClick={onPaletteOpen}
           title="Open command palette"
         >
-          ⌘ K
+          {modKeyLabel('K')}
         </button>
         <span className="og-kbd-label">command</span>
       </div>

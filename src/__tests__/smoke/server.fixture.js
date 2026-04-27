@@ -15,7 +15,6 @@ import { sendError } from '../../../server/sendError.js';
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 2000;
 const MAX_BATCH_FILES = 20;
-const ALLOWED_EXTRACT_IMAGES_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TIMEOUT_MARKER = 'Gemini request timed out';
 
@@ -174,81 +173,6 @@ export function buildApp(opts = {}) {
         thumbnail: file.mimetype.startsWith('image/') ? `data:image/png;base64,STUB${i}` : null,
       }));
       return res.json({ sketches, message: `Found ${sketches.length} sketches.` });
-    } catch (error) {
-      sendError(res, 'OCR_INTERNAL', { cause: error?.message || error });
-    }
-  });
-
-  app.post('/api/extract-images', uploadArray.any(), async (req, res) => {
-    try {
-      const file = pickUploadedFile(req);
-      if (!file) return sendError(res, 'CAP_NO_FILE');
-      if (!ALLOWED_EXTRACT_IMAGES_MIMES.includes(file.mimetype)) {
-        return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type for image extraction.' });
-      }
-      let jsonText = await callModel('json');
-      jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
-      let raw;
-      try {
-        raw = JSON.parse(jsonText);
-      } catch {
-        return sendError(res, 'OCR_MALFORMED_JSON');
-      }
-      if (!Array.isArray(raw)) {
-        return sendError(res, 'OCR_MALFORMED_JSON', { message: 'Model did not return an array.' });
-      }
-      const boxes = raw.filter(b =>
-        b && typeof b.description === 'string' &&
-        Array.isArray(b.boundingBox) && b.boundingBox.length === 4 &&
-        b.boundingBox.every(n => typeof n === 'number' && n >= 0 && n <= 1000) &&
-        b.boundingBox[2] > b.boundingBox[0] &&
-        b.boundingBox[3] > b.boundingBox[1]
-      );
-      const extractedImages = [];
-      if (file.mimetype.startsWith('image/')) {
-        try {
-          const metadata = await sharp(file.buffer).metadata();
-          const { width, height } = metadata;
-          for (let i = 0; i < boxes.length; i++) {
-            const box = boxes[i].boundingBox;
-            const ymin = box[0] / 1000, xmin = box[1] / 1000;
-            const ymax = box[2] / 1000, xmax = box[3] / 1000;
-            const left = Math.max(0, Math.floor(xmin * width));
-            const top = Math.max(0, Math.floor(ymin * height));
-            const w = Math.min(width - left, Math.floor((xmax - xmin) * width));
-            const h = Math.min(height - top, Math.floor((ymax - ymin) * height));
-            if (w > 0 && h > 0) {
-              try {
-                const cropped = await sharp(file.buffer)
-                  .extract({ left, top, width: w, height: h })
-                  .png()
-                  .toBuffer();
-                extractedImages.push({
-                  id: i + 1,
-                  desc: boxes[i].description,
-                  data: `data:image/png;base64,${cropped.toString('base64')}`,
-                });
-              } catch (cropErr) {
-                // Mirror prod: log and skip; don't fail the whole request
-                console.error(`Crop ${i + 1} failed:`, cropErr.message);
-              }
-            }
-          }
-        } catch (e) {
-          // sharp metadata failed (e.g. corrupt image)
-          return sendError(res, 'OCR_INTERNAL', { cause: e?.message });
-        }
-      } else {
-        // PDF path — descriptions only
-        boxes.forEach((box, i) => {
-          extractedImages.push({
-            id: i + 1,
-            desc: box.description + ` (Bounding Box: ${box.boundingBox.join(', ')})`,
-            data: null,
-          });
-        });
-      }
-      res.json({ success: true, images: extractedImages, message: `Found ${boxes.length} visual components.` });
     } catch (error) {
       sendError(res, 'OCR_INTERNAL', { cause: error?.message || error });
     }

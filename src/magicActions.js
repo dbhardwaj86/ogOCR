@@ -7,7 +7,7 @@ const DETECTED_LANG_DIRECTIVE =
   ' Always end your response with a single line: "__detected_lang: <ISO 639-1 code>"' +
   ' (e.g., "__detected_lang: en"). Use "und" if you cannot detect.';
 
-// The 8 magic actions. Each row's `id`, `prompt`, and `endpoint` are the
+// Magic actions. Each row's `id`, `prompt`, and `endpoint` are the
 // wire-compat contract with the existing server endpoints — do not rename
 // or change those values without coordinating with server/index.js.
 //
@@ -16,6 +16,11 @@ const DETECTED_LANG_DIRECTIVE =
 // Today the renderer surfaces the field as a `data-tier` attribute so the
 // design migration can collapse overflow into a "More…" popover without
 // touching this contract or the runAction wiring.
+//
+// Diagram→Mermaid, Extract Images, and the Refine row were removed in the
+// 2026-04-27 surface trim — Mermaid had little real-world utility, Extract
+// Images was replaced by client-side raster export of the upload, and Refine
+// rarely improved on the user's own follow-up prompt via PromptDock.
 export const MAGIC_ACTIONS = [
   {
     id: 'text', group: 'Text', label: 'Extract Text',
@@ -53,78 +58,15 @@ export const MAGIC_ACTIONS = [
     prompt: 'Extract the handwritten math equations from this document and output compile-ready LaTeX code. Do not include markdown code blocks, just the raw LaTeX.',
   },
   {
-    id: 'mermaid', group: 'Symbol', label: 'Diagram → Mermaid',
-    hint: 'Flowchart → Mermaid.js code',
-    glyph: '◇', key: 'D', tier: 'overflow',
-    endpoint: '/api/extract',
-    prompt: 'Convert the flowchart or diagram in this image into valid Mermaid.js markdown code. Return strictly the Mermaid code block.',
-  },
-  {
     id: 'sketch', group: 'Visual', label: 'Sketch → SVG',
     hint: 'Detect & vectorize sketches',
     glyph: '✎', key: 'S', tier: 'overflow',
     endpoint: '/api/sketch-to-svg',
     prompt: null,
   },
-  {
-    id: 'images', group: 'Visual', label: 'Extract Images',
-    hint: 'Pull all figures with descriptions',
-    glyph: '▣', key: 'I', tier: 'overflow',
-    endpoint: '/api/extract-images',
-    prompt: null,
-  },
 ];
 
 export const ACTION_GROUPS = ['Text', 'Structure', 'Symbol', 'Visual'];
-
-// Refine actions reuse the /api/extract endpoint to rewrite the active
-// session's extracted text into one of four canned tones. They share the
-// magic-action wire shape (id/label/hint/prompt) but are a separate group
-// — they don't operate on the uploaded file, they refine `session.text`.
-// Each prompt ends with a strict markdown directive so the response slots
-// cleanly into the existing ReactMarkdown render path.
-export const REFINE_ACTIONS = [
-  {
-    id: 'refine-summary',
-    label: 'Summary',
-    hint: 'Three-sentence summary of the source',
-    kind: 'summary',
-    prompt: 'Summarize the following text in exactly three sentences. Capture the most important points and keep the tone neutral. Output markdown only — no preamble.',
-  },
-  {
-    id: 'refine-bullets',
-    label: 'Bullets',
-    hint: 'Concise bullet list of the key points',
-    kind: 'bullets',
-    prompt: 'Rewrite the following text as a concise markdown bullet list. Each bullet must be a single short sentence covering one key point. Output markdown only — no preamble.',
-  },
-  {
-    id: 'refine-formal',
-    label: 'Formal',
-    hint: 'Formal, professional rewrite',
-    kind: 'formal',
-    prompt: 'Rewrite the following text in a formal, professional tone. Keep the meaning unchanged but elevate the diction and sentence structure. Output markdown only — no preamble.',
-  },
-  {
-    id: 'refine-casual',
-    label: 'Casual',
-    hint: 'Casual, friendly rewrite',
-    kind: 'casual',
-    prompt: 'Rewrite the following text in a casual, friendly tone — as if explaining it to a friend. Keep the meaning unchanged. Output markdown only — no preamble.',
-  },
-];
-
-// Map id → refinement key on session.refinements. Stable union with the
-// 8 magic-action ids; do not collide.
-export const REFINE_KIND_BY_ID = REFINE_ACTIONS.reduce((acc, a) => {
-  acc[a.id] = a.kind;
-  return acc;
-}, {});
-
-export const REFINE_LABEL_BY_KIND = REFINE_ACTIONS.reduce((acc, a) => {
-  acc[a.kind] = a.label;
-  return acc;
-}, {});
 
 export const KIND_LABEL = {
   text: 'Plain text',
@@ -132,9 +74,7 @@ export const KIND_LABEL = {
   table: 'Tabular',
   actions: 'Action items',
   math: 'LaTeX',
-  mermaid: 'Mermaid',
   sketch: 'SVG',
-  images: 'Image set',
 };
 
 export const KIND_GLYPH = {
@@ -143,9 +83,7 @@ export const KIND_GLYPH = {
   table: '▦',
   actions: '✓',
   math: '∑',
-  mermaid: '◇',
   sketch: '✎',
-  images: '▣',
 };
 
 export function relTime(d) {

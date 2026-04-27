@@ -19,7 +19,7 @@
 // All `run` calls are fire-and-forget — errors surface via the registry.
 
 import { buildSvgExports } from './svgExports';
-import { exportRaster, exportRasterAll } from './exportRaster';
+import { exportRaster, exportRasterAll, rasterFromImage, rasterPdfPages } from './exportRaster';
 import { exportDocx } from './exportDocx';
 import { compileToMarkdown, compileToHtml, hydrateCompileImages } from './compile';
 
@@ -75,12 +75,57 @@ export async function saveOrShare(blob, filename, mime) {
 
 // --- Per-session formats --------------------------------------------------
 
-export function buildSessionFormats({ session, baseName }) {
-  if (!session) return [];
+export function buildSessionFormats({ session, baseName, file, pdfPageCount, onPageProgress }) {
   const items = [];
-  const text = (session.text || '').trim();
-  const svg = (session.svg || '').trim();
-  const svgExports = buildSvgExports(session, baseName);
+  const text = (session?.text || '').trim();
+  const svg = (session?.svg || '').trim();
+  const svgExports = session ? buildSvgExports(session, baseName) : [];
+
+  // Source-derived raster formats: always offered when an upload is present
+  // (independent of extraction). Replaces the dropped "Extract Images"
+  // action with a deterministic, client-side "save the original / each PDF
+  // page as PNG/JPG" surface.
+  if (file && file.type?.startsWith('image/')) {
+    items.push({
+      id: 'src-png',
+      label: 'Original as PNG',
+      glyph: '◯',
+      run: async () => rasterFromImage(file, { format: 'png', filename: baseName }),
+    });
+    items.push({
+      id: 'src-jpg',
+      label: 'Original as JPG',
+      glyph: '◯',
+      run: async () => rasterFromImage(file, { format: 'jpg', filename: baseName }),
+    });
+  } else if (file && file.type === 'application/pdf') {
+    const n = pdfPageCount || 0;
+    const labelSuffix = n > 1 ? ` (${n})` : '';
+    const allText = n > 1 ? 'All pages as PNG' : 'Page as PNG';
+    const allJpg = n > 1 ? 'All pages as JPG' : 'Page as JPG';
+    items.push({
+      id: 'pdf-png',
+      label: `${allText}${labelSuffix}`,
+      glyph: '◯',
+      run: async () => rasterPdfPages(file, {
+        format: 'png',
+        baseFilename: baseName,
+        onProgress: onPageProgress,
+      }),
+    });
+    items.push({
+      id: 'pdf-jpg',
+      label: `${allJpg}${labelSuffix}`,
+      glyph: '◯',
+      run: async () => rasterPdfPages(file, {
+        format: 'jpg',
+        baseFilename: baseName,
+        onProgress: onPageProgress,
+      }),
+    });
+  }
+
+  if (!session) return items;
 
   if (svg) {
     items.push({

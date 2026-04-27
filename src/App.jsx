@@ -12,7 +12,7 @@ import Toast from './components/Toast';
 import CompileBuilder from './components/CompileBuilder';
 import DiagnosticsPanel from './components/DiagnosticsPanel';
 import ErrorBoundary from './components/ErrorBoundary';
-import { MAGIC_ACTIONS, REFINE_ACTIONS, REFINE_KIND_BY_ID, LANGUAGE_OVERRIDE_PROMPT } from './magicActions';
+import { MAGIC_ACTIONS, LANGUAGE_OVERRIDE_PROMPT } from './magicActions';
 import { showError, installErrorSinks, showInfo } from './errors/showError';
 import { errFromResponse, errFromException } from './errors/errFromResponse';
 import { formatMessage } from './errors/codes';
@@ -179,6 +179,13 @@ function App() {
   }, []);
 
   const abortRef = useRef(null);
+  // Vectorize batch state. `vectorizeAbortRef` holds the AbortController for
+  // the in-flight per-sketch fetch so Cancel can interrupt the current call.
+  // `batchAbortRef` is a flag the for-of loop checks between iterations to
+  // bail out of the queue without waiting for the current fetch's natural
+  // completion.
+  const vectorizeAbortRef = useRef(null);
+  const batchAbortRef = useRef({ cancelled: false });
   const progressRef = useRef(null);
   const toastTimerRef = useRef(null);
 
@@ -532,7 +539,8 @@ function App() {
 
   const startProgress = useCallback((actionId) => {
     const token = {};
-    setProcessing({ actionId, progress: 0, stage: 'preparing', token });
+    const startedAt = Date.now();
+    setProcessing({ actionId, progress: 0, stage: 'preparing', token, startedAt });
     let pct = 0;
     const stages = [
       { at: 12, name: 'preparing' },
@@ -565,6 +573,22 @@ function App() {
     }, 220);
   }, [stopProgress]);
 
+  // Vectorize-flavoured progress: no random jitter, no terminal flush. The
+  // caller drives `progress` and `stage` directly via `setVectorizeStage`.
+  // Used for single sketches (`actionId: 'sketch'`) and batches
+  // (`actionId: 'sketch-batch'`) so the existing OCR_BUSY gate in `runAction`
+  // automatically blocks magic-action tiles while a vectorize is in flight.
+  const startVectorizing = useCallback((actionId, label) => {
+    const token = {};
+    setProcessing({ actionId, progress: 0, stage: label || 'vectorizing', token, startedAt: Date.now() });
+    progressRef.current = { token, id: null };
+    return token;
+  }, []);
+
+  const setVectorizeStage = useCallback((token, progress, stage) => {
+    setProcessing(p => (p?.token === token ? { ...p, progress, stage } : p));
+  }, []);
+
   // Track K — runAction accepts a `languageOverride` (ISO code or 'auto')
   // as a third argument or via an options object. When set, the action's
   // base prompt is wrapped by LANGUAGE_OVERRIDE_PROMPT so Gemini treats
@@ -572,23 +596,9 @@ function App() {
   // trailing __detected_lang line. Passing 'auto' (or omitting) falls
   // through to the base prompt.
   const runAction = useCallback(async (actionId, customPromptOverride, opts = {}) => {
-    const refineAction = REFINE_ACTIONS.find(a => a.id === actionId);
-    const isRefine = !!refineAction;
     const languageOverride = (opts && typeof opts === 'object') ? opts.languageOverride : null;
 
-    // Refine actions skip the file-required early bail — they refine
-    // `session.text` rather than the uploaded file. They still need an
-    // active session with non-empty text to operate on.
-    if (isRefine) {
-      const sourceText = (activeSession?.text || '').trim();
-      if (!sourceText) {
-        showError('OCR_EMPTY', {
-          message: 'Run an action first to get text to refine.',
-          hint: 'Pick one of the 8 magic actions above before refining.',
-        });
-        return;
-      }
-    } else if (!file) {
+    if (!file) {
       showError('OCR_BAD_FILE');
       return;
     }
@@ -597,21 +607,17 @@ function App() {
       return;
     }
 
-    const action = isRefine ? null : MAGIC_ACTIONS.find(a => a.id === actionId);
+    const action = MAGIC_ACTIONS.find(a => a.id === actionId);
     const endpoint = action?.endpoint || '/api/extract';
-    const basePrompt = customPromptOverride
-      ?? (isRefine
-        ? `${refineAction.prompt}\n\nINPUT:\n${activeSession.text}`
-        : action?.prompt ?? '');
+    const basePrompt = customPromptOverride ?? (action?.prompt ?? '');
     // Track K — language override only wraps text-bearing magic-action prompts.
-    // SVG / image-extract endpoints have null prompts and an override would be
-    // a no-op anyway. Refine actions are language-agnostic so we skip them too.
-    const prompt = (!isRefine && languageOverride && languageOverride !== 'auto' && basePrompt)
+    // SVG endpoints have null prompts and an override would be a no-op anyway.
+    const prompt = (languageOverride && languageOverride !== 'auto' && basePrompt)
       ? LANGUAGE_OVERRIDE_PROMPT(basePrompt, languageOverride)
       : basePrompt;
 
     let sessionId = activeSessionId;
-    if (!sessionId && !isRefine) sessionId = createNewSession(file.name);
+    if (!sessionId) sessionId = createNewSession(file.name);
 
     if (abortRef.current) abortRef.current.abort();
     abortRef.current = new AbortController();
@@ -624,20 +630,7 @@ function App() {
 
     try {
       const formData = new FormData();
-      if (isRefine) {
-        // Server requires multipart with a `file` field (multer.single('file')).
-        // We're refining text, not a file — wrap the source text in a synthetic
-        // text/plain blob so the existing endpoint accepts it without server
-        // changes. Gemini accepts text/plain in inlineData for text inputs.
-        const synthetic = new File(
-          [activeSession.text],
-          'refine-input.txt',
-          { type: 'text/plain' }
-        );
-        formData.append('file', synthetic);
-      } else {
-        formData.append('file', file);
-      }
+      formData.append('file', file);
       if (prompt) formData.append('prompt', prompt);
 
       const r = await fetch(endpoint, { method: 'POST', body: formData, signal });
@@ -650,104 +643,51 @@ function App() {
       }
 
       let hadResponse = false;
-      let updates = {};
-
-      if (isRefine) {
-        // Refinements land on `session.refinements[kind]` — they don't
-        // overwrite `session.text` or `session.kind`, so the underlying
-        // extraction stays the source of truth.
-        if (typeof data.text === 'string' && data.text.trim()) {
-          const refineKind = REFINE_KIND_BY_ID[actionId];
-          const prevRefinements = activeSession?.refinements || {};
-          updates = {
-            refinements: { ...prevRefinements, [refineKind]: data.text },
-          };
-          hadResponse = true;
-        }
-      } else {
-        updates = { kind: actionId };
-        // Track K — record the active language override on the session so a
-        // reload picks the same chip state. `auto` clears the override.
-        if (languageOverride === 'auto') {
-          updates.languageOverride = null;
-        } else if (languageOverride) {
-          updates.languageOverride = languageOverride;
-        }
-        // v4 — preserve prior actions' outputs by merging into a per-action
-        // map. Each new extraction populates outputs[actionId] below in the
-        // result-shape branches; other actions' entries survive untouched.
-        const priorOutputs = (activeSession && typeof activeSession.outputs === 'object')
-          ? activeSession.outputs
-          : {};
-        if (data.svg) {
-          updates.svg = data.svg;
-          updates.text = '';
-          updates.outputs = { ...priorOutputs, [actionId]: { kind: 'svg', svg: data.svg } };
-          hadResponse = true;
-        } else if (Array.isArray(data.sketches)) {
-          // Multi-sketch discovery path (Phase 15). The server detected 2+
-          // sketches in the upload and returned candidates with optional
-          // thumbnails (images only, PDFs omit them — Phase 2 follow-up).
-          // Per-card vectorization is handled lazily by vectorizeSketch().
-          // Cap thumbnail size by storing them inline; the localStorage
-          // circuit breaker handles overflow if a user accumulates many
-          // sketch sessions. selectedSketchId seeds the picker on first paint.
-          updates.sketches = data.sketches.map(s => ({
-            id: s.id,
-            description: s.description,
-            bbox: s.bbox,
-            page: s.page || 1,
-            thumbnail: s.thumbnail || null,
-            svg: '',
-            status: 'pending', // 'pending' | 'running' | 'done' | 'error'
-          }));
-          updates.selectedSketchId = data.sketches[0]?.id || null;
-          updates.svg = '';
-          updates.text = data.message || `Found ${data.sketches.length} sketches. Pick one to vectorize.`;
-          hadResponse = true;
-        } else if (Array.isArray(data.images)) {
-          // Native image rendering path (schema v2): keep the structured array
-          // on `session.images`. RenderedDoc renders the grid natively; the
-          // text field stores only the summary line so the markdown path still
-          // works as a fallback for older renderers.
-          // v4: also persist each blob to IDB. The in-memory copy keeps the
-          // `data:` URL so the active render is instant; the persistence
-          // effect strips it before localStorage so the quota-overflow path
-          // is unreachable. If IDB write fails (quota), we surface IDB_QUOTA
-          // but keep the in-memory state intact so the user still sees the
-          // result for this session.
-          updates.images = data.images;
-          updates.svg = '';
-          // Fire-and-forget: the user shouldn't wait for IDB to acknowledge
-          // before seeing the extracted images. Errors are routed through
-          // showError so a quota miss is visible.
-          (async () => {
-            for (const img of data.images) {
-              if (!img?.id || typeof img?.data !== 'string') continue;
-              try {
-                const blob = await dataURLToBlob(img.data);
-                if (blob) await idbSetImage(img.id, blob);
-              } catch (e) {
-                if (e?.code === 'IDB_QUOTA') {
-                  showError('IDB_QUOTA');
-                  break;
-                }
-                console.warn('IDB store failed for image', img.id, e);
-              }
-            }
-          })();
-          if (data.images.length === 0) {
-            updates.text = '_No visual components found in this document._';
-          } else {
-            updates.text = data.message || `Found ${data.images.length} visual components.`;
-          }
-          hadResponse = true;
-        } else if (typeof data.text === 'string') {
-          updates.text = data.text;
-          updates.svg = '';
-          updates.outputs = { ...priorOutputs, [actionId]: { kind: 'text', text: data.text } };
-          hadResponse = true;
-        }
+      let updates = { kind: actionId };
+      // Track K — record the active language override on the session so a
+      // reload picks the same chip state. `auto` clears the override.
+      if (languageOverride === 'auto') {
+        updates.languageOverride = null;
+      } else if (languageOverride) {
+        updates.languageOverride = languageOverride;
+      }
+      // v4 — preserve prior actions' outputs by merging into a per-action
+      // map. Each new extraction populates outputs[actionId] below in the
+      // result-shape branches; other actions' entries survive untouched.
+      const priorOutputs = (activeSession && typeof activeSession.outputs === 'object')
+        ? activeSession.outputs
+        : {};
+      if (data.svg) {
+        updates.svg = data.svg;
+        updates.text = '';
+        updates.outputs = { ...priorOutputs, [actionId]: { kind: 'svg', svg: data.svg } };
+        hadResponse = true;
+      } else if (Array.isArray(data.sketches)) {
+        // Multi-sketch discovery path (Phase 15). The server detected 2+
+        // sketches in the upload and returned candidates with optional
+        // thumbnails (images only, PDFs omit them — Phase 2 follow-up).
+        // Per-card vectorization is handled lazily by vectorizeSketch().
+        // Cap thumbnail size by storing them inline; the localStorage
+        // circuit breaker handles overflow if a user accumulates many
+        // sketch sessions. selectedSketchId seeds the picker on first paint.
+        updates.sketches = data.sketches.map(s => ({
+          id: s.id,
+          description: s.description,
+          bbox: s.bbox,
+          page: s.page || 1,
+          thumbnail: s.thumbnail || null,
+          svg: '',
+          status: 'pending', // 'pending' | 'running' | 'done' | 'error'
+        }));
+        updates.selectedSketchId = data.sketches[0]?.id || null;
+        updates.svg = '';
+        updates.text = data.message || `Found ${data.sketches.length} sketches. Pick one to vectorize.`;
+        hadResponse = true;
+      } else if (typeof data.text === 'string') {
+        updates.text = data.text;
+        updates.svg = '';
+        updates.outputs = { ...priorOutputs, [actionId]: { kind: 'text', text: data.text } };
+        hadResponse = true;
       }
 
       if (!hadResponse) {
@@ -769,7 +709,7 @@ function App() {
         ? activeSession
         : { id: sessionId, filename: file?.name || 'Untitled', date: Date.now(), text: '', svg: '', kind: 'text' };
       syncAutoCompileForSession({ ...beforeSession, ...updates });
-      const label = isRefine ? refineAction.label : (action?.label || 'Run');
+      const label = action?.label || 'Run';
       showInfo(`${label} complete`);
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -795,7 +735,13 @@ function App() {
   // session.sketches[i].status + svg in place. Cold-resume friendly: if
   // `file` is no longer in memory (page reload), surfaces a toast and
   // bails — the user will need to re-upload to continue vectorizing.
-  const vectorizeSketch = useCallback(async (sketchId) => {
+  //
+  // Options:
+  //   - opts.silent: when true, skip the per-call processing strip / busy
+  //     gate. Used by `vectorizeAllSketches` so the BATCH owns one
+  //     processing slot for its full duration instead of toggling for every
+  //     iteration. Caller is responsible for the gate in that case.
+  const vectorizeSketch = useCallback(async (sketchId, opts = {}) => {
     if (!activeSessionId) return;
     if (!file) {
       showError('CAP_NO_FILE', {
@@ -804,10 +750,15 @@ function App() {
       });
       return;
     }
+    const silent = !!opts.silent;
     const session = sessions.find(s => s.id === activeSessionId);
     const sketch = session?.sketches?.find(s => s.id === sketchId);
     if (!sketch) return;
     if (sketch.status === 'running') return;
+    if (!silent && processing) {
+      showError('OCR_BUSY');
+      return;
+    }
 
     // Mark running.
     setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
@@ -815,12 +766,25 @@ function App() {
       sketches: s.sketches.map(sk => sk.id === sketchId ? { ...sk, status: 'running' } : sk),
     })));
 
+    // Per-call AbortController so cancel can interrupt the in-flight fetch.
+    const controller = new AbortController();
+    vectorizeAbortRef.current = controller;
+
+    let progressToken = null;
+    if (!silent) {
+      progressToken = startVectorizing('sketch', `Vectorizing sketch ${sketchId}`);
+    }
+
     try {
       const formData = new FormData();
       formData.append('files', file);
       formData.append('bbox', JSON.stringify(sketch.bbox));
       formData.append('page', String(sketch.page || 1));
-      const r = await fetch('/api/sketch-to-svg', { method: 'POST', body: formData });
+      const r = await fetch('/api/sketch-to-svg', {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || typeof data.svg !== 'string' || !data.svg.trim()) {
         const entry = await errFromResponse(r);
@@ -848,8 +812,18 @@ function App() {
         return next;
       }));
       if (sessionAfter) syncAutoCompileForSession(sessionAfter);
-      showInfo(`Sketch ${sketchId} vectorized`);
+      if (!silent) showInfo(`Sketch ${sketchId} vectorized`);
     } catch (err) {
+      if (err?.name === 'AbortError') {
+        // Cancelled by user — reset status to pending so per-card Retry works.
+        setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
+          ...s,
+          sketches: s.sketches.map(sk =>
+            sk.id === sketchId && sk.status === 'running' ? { ...sk, status: 'pending' } : sk
+          ),
+        })));
+        throw err;
+      }
       console.error(err);
       setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
         ...s,
@@ -857,31 +831,81 @@ function App() {
       })));
       const entry = err.__registryEntry || errFromException(err);
       showError(entry.code, { message: entry.message, hint: entry.hint });
+    } finally {
+      if (vectorizeAbortRef.current === controller) vectorizeAbortRef.current = null;
+      if (!silent && progressToken) finishProgress(progressToken);
     }
-  }, [file, activeSessionId, sessions, syncAutoCompileForSession]);
+  }, [file, activeSessionId, sessions, processing, syncAutoCompileForSession, startVectorizing, finishProgress]);
 
   // Phase 15 — sequentially vectorize every pending sketch on the active
   // session. Stops on the first error so the user can decide whether to
   // retry. Sequential (per the plan default) to dodge the per-IP semaphore
   // and avoid doubling Gemini spend on a click.
+  //
+  // 2026-04-27: the batch now owns one `processing` slot for its full
+  // duration so magic-action tiles, custom prompt, and per-card Vectorize
+  // buttons all gate via the existing OCR_BUSY check. The user can interrupt
+  // mid-batch via `cancelVectorizeBatch` — the for-of loop checks the
+  // shared `batchAbortRef` flag between iterations so the next sketch
+  // doesn't fire after Stop.
   const vectorizeAllSketches = useCallback(async () => {
+    if (processing) {
+      showError('OCR_BUSY');
+      return;
+    }
     const session = sessions.find(s => s.id === activeSessionId);
     if (!session?.sketches) return;
-    for (const sketch of session.sketches) {
-      if (sketch.status === 'done') continue;
-      const before = Date.now();
-      await vectorizeSketch(sketch.id);
-      // After each await, re-read the latest session to check if the most
-      // recent vectorize errored — bail to let the user decide.
-      const after = sessions.find(s => s.id === activeSessionId);
-      const updatedSketch = after?.sketches?.find(sk => sk.id === sketch.id);
-      if (updatedSketch?.status === 'error') break;
-      // Tiny breather so the per-IP semaphore can release.
-      if (Date.now() - before < 200) {
-        await new Promise(r => setTimeout(r, 200));
+    const pending = session.sketches.filter(s => s.status !== 'done');
+    if (pending.length === 0) return;
+
+    batchAbortRef.current = { cancelled: false };
+    const total = pending.length;
+    const token = startVectorizing('sketch-batch', `Vectorizing 1 of ${total}`);
+
+    try {
+      let done = 0;
+      for (const sketch of session.sketches) {
+        if (batchAbortRef.current.cancelled) break;
+        if (sketch.status === 'done') continue;
+        done += 1;
+        const pct = Math.max(2, Math.round(((done - 1) / total) * 100));
+        setVectorizeStage(token, pct, `Vectorizing ${done} of ${total}`);
+        const before = Date.now();
+        try {
+          await vectorizeSketch(sketch.id, { silent: true });
+        } catch (err) {
+          if (err?.name === 'AbortError') break;
+          // vectorizeSketch already routed the error toast; bail to let the user decide.
+          break;
+        }
+        if (batchAbortRef.current.cancelled) break;
+        // After each await, re-read the latest session to check if the most
+        // recent vectorize errored — bail to let the user decide.
+        const after = sessions.find(s => s.id === activeSessionId);
+        const updatedSketch = after?.sketches?.find(sk => sk.id === sketch.id);
+        if (updatedSketch?.status === 'error') break;
+        // Tiny breather so the per-IP semaphore can release.
+        if (Date.now() - before < 200) {
+          await new Promise(r => setTimeout(r, 200));
+        }
       }
+      setVectorizeStage(token, 100, 'finalizing');
+    } finally {
+      finishProgress(token);
+      batchAbortRef.current = { cancelled: false };
     }
-  }, [sessions, activeSessionId, vectorizeSketch]);
+  }, [sessions, activeSessionId, vectorizeSketch, processing, startVectorizing, setVectorizeStage, finishProgress]);
+
+  // User-initiated stop for the vectorize batch. Aborts the in-flight
+  // /api/sketch-to-svg fetch (so the current sketch doesn't finish silently)
+  // AND flips the loop flag so the next sketch won't dequeue.
+  const cancelVectorizeBatch = useCallback(() => {
+    batchAbortRef.current = { cancelled: true };
+    if (vectorizeAbortRef.current) {
+      try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+    }
+    showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: 'Resume any sketch via its Vectorize button.' });
+  }, []);
 
   // Phase 15 (v3 update) — promote a vectorized sketch to the main canvas
   // without destroying the picker. `session.sketches[]` is preserved so the
@@ -993,29 +1017,6 @@ function App() {
           updates.selectedSketchId = data.sketches[0]?.id || null;
           updates.svg = '';
           updates.text = data.message || `Found ${data.sketches.length} sketches. Pick one to vectorize.`;
-          hadResponse = true;
-        } else if (Array.isArray(data.images)) {
-          updates.images = data.images;
-          updates.svg = '';
-          // Mirror runAction's IDB persistence — fire-and-forget.
-          (async () => {
-            for (const img of data.images) {
-              if (!img?.id || typeof img?.data !== 'string') continue;
-              try {
-                const blob = await dataURLToBlob(img.data);
-                if (blob) await idbSetImage(img.id, blob);
-              } catch (e) {
-                if (e?.code === 'IDB_QUOTA') {
-                  showError('IDB_QUOTA');
-                  break;
-                }
-                console.warn('IDB store failed for image', img.id, e);
-              }
-            }
-          })();
-          updates.text = data.images.length === 0
-            ? '_No visual components found in this document._'
-            : (data.message || `Found ${data.images.length} visual components.`);
           hadResponse = true;
         } else if (typeof data.text === 'string') {
           updates.text = data.text;
@@ -1141,11 +1142,26 @@ function App() {
   }, [activeSessionId, sessions, runAction, updateSession]);
 
   const cancelRunning = useCallback(() => {
+    // Vectorize batch and single vectorize go through their own abort
+    // surface so the per-sketch status can reset cleanly.
+    if (processing?.actionId === 'sketch-batch') {
+      batchAbortRef.current = { cancelled: true };
+      if (vectorizeAbortRef.current) {
+        try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+      }
+      showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: 'Resume any sketch via its Vectorize button.' });
+      return;
+    }
+    if (processing?.actionId === 'sketch' && vectorizeAbortRef.current) {
+      try { vectorizeAbortRef.current.abort(); } catch { /* ignore */ }
+      showError('OCR_ABORTED', { message: 'Vectorize stopped.', hint: null });
+      return;
+    }
     if (abortRef.current) {
       abortRef.current.abort();
       showError('CAP_ABORTED', { message: 'Cancelled.', hint: null });
     }
-  }, []);
+  }, [processing]);
 
   const retryLastAction = useCallback(() => {
     if (!activeSession?.lastError?.actionId) return;
@@ -1269,6 +1285,7 @@ function App() {
             sessionCount={sessions.length}
             onVectorizeSketch={vectorizeSketch}
             onVectorizeAllSketches={vectorizeAllSketches}
+            onCancelBatch={cancelVectorizeBatch}
             onOpenSketch={openSketch}
             onShowAllSketches={showAllSketches}
           />

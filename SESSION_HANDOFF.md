@@ -1,13 +1,68 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post carryover sprint: equation CSS, table onChange, langpill props, plan §3 gap close)
-**Plan file (latest pass):** `C:\Users\abc\.claude\plans\where-is-the-functionality-zesty-glacier.md` (Streamline Saving + Fix Output-Loss Bugs — drove the v4 + unified-Save commit `9c99826`; §3.1 / §3.3 closed in `9b907d0`)
+**Last updated:** 2026-04-27 (post Surface-Trim + Polish sprint: vectorize abort, vectorize UI gate, dropped Mermaid/Images/Refine, raw-image PNG/JPG export, 8 polish items)
+**Plan file (latest pass):** `C:\Users\abc\.claude\plans\open-a-plan-doc-radiant-raccoon.md` (Polish + Vectorize-Abort + Action Surface Trim)
+**Plan file (prior pass):** `C:\Users\abc\.claude\plans\where-is-the-functionality-zesty-glacier.md` (drove v4 + unified-Save in `9c99826`; §3.1/§3.3 closed in `9b907d0`)
 **Plan file (Multi-Sketch + Auto-Compile pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md`
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — Carryover sprint** first, then the prior passes, then the original plan if you need context.
+Read **Latest pass — Surface-Trim + Polish** first, then the prior passes, then the original plan if you need context.
+
+## Latest pass — Surface-Trim + Polish sprint (2026-04-27)
+
+**Why:** Three concrete asks the user surfaced after the v4 + unified-Save sprint, plus the eight highest-leverage UX/UI holes from a 4-subagent polish audit. The audit ran read-only across upload/onboarding, action/processing, output/export, and visual/theme; full findings live in the plan file.
+
+**Track A — three concrete asks:**
+
+| Ask | Summary | Files |
+|---|---|---|
+| **A1 — Abort batch vectorize** | Sequential `vectorizeAllSketches` was uninterruptible. New `batchAbortRef = { cancelled: bool }` flag on App; the for-of loop checks between iterations. New `vectorizeAbortRef` (AbortController) so the in-flight `/api/sketch-to-svg` fetch is interrupted, not just the queue. SketchesPicker swaps "Vectorize All" → "Stop (N left)" while a batch is active. ProcessingStrip's existing Cancel slot now wired in App's `cancelRunning` for both single + batch vectorize. Aborted sketches reset `status: 'pending'` so per-card Retry resumes one-at-a-time. | `src/App.jsx`, `src/components/SketchesPicker.jsx`, `src/components/OutputColumn.jsx` |
+| **A2 — Vectorize gates the UI** | Both `vectorizeSketch` and `vectorizeAllSketches` now own a `processing` slot via the new `startVectorizing(actionId, label)` helper (no random-jitter progress curve — direct stage updates via `setVectorizeStage`). Because `runAction` already early-returns with OCR_BUSY when `processing` is truthy, magic-action tiles, custom prompt, palette, and re-clicks are all blocked during vectorize. Single calls use `actionId: 'sketch'`; batch uses `'sketch-batch'`. | `src/App.jsx` |
+| **A3a — Drop dead actions** | Removed Mermaid (◇ Diagram → Mermaid), Extract Images (▣), and the entire Refine row (Summary/Bullets/Formal/Casual). Deleted: `RefinementTabs.jsx`, MermaidEditor + `detectMermaidBlock` from `RenderedDoc.jsx`, `/api/extract-images` server route + smoke fixture, `mermaid` npm dep, `mermaid.test.js`, `refine.test.js`, OutputColumn's Refine and Diagram pills, App's `data.images` + refine branches. `KIND_LABEL` / `KIND_GLYPH` trimmed. Compile.js still keeps `auto:image:*` and `auto:refinement:*` role logic so legacy sessions still hydrate cleanly — the codepaths just never produce new entries. | `src/magicActions.js`, `src/components/MagicActions.jsx`, `src/components/OutputColumn.jsx`, `src/components/RenderedDoc.jsx`, `src/App.jsx`, `server/index.js`, `package.json`, `src/__tests__/smoke/*` |
+| **A3b — Add raw image / PDF page export** | New helpers in `src/exportRaster.js`: `rasterFromImage(file, opts)` re-encodes an uploaded image through canvas to PNG/JPG; `rasterPdfPages(file, { format, pageScale, baseFilename, onProgress })` dynamic-imports `pdfjs-dist`, walks every page at 2× scale, downloads sequentially with a 60 ms breather. Save picker (`buildSessionFormats`) now accepts `file` + `pdfPageCount` + `onPageProgress`; surfaces **Original as PNG / JPG** for image uploads and **All pages as PNG (N) / JPG (N)** for PDFs. ExportBar lazily probes PDF page count on file change and forwards progress (`Saving page 3 of 12…` label). Save button enables when a file is present even pre-extraction (replaces the dropped Extract Images action). | `src/exportRaster.js`, `src/saveFormats.js`, `src/components/ExportBar.jsx`, `src/components/OutputColumn.jsx` |
+
+**Track B — polish (the eight highest-leverage holes):**
+
+| # | Item | Files |
+|---|---|---|
+| B1 | Honest progress UI: at the 95% cap the bar drops the lying fill and ProcessingStrip shows live elapsed time + "large PDFs may take 1–3 min" hint. `processing.startedAt` set in both `startProgress` and `startVectorizing`. | `src/components/ProcessingStrip.jsx`, `src/App.jsx` |
+| B2 | Visible Cancel from action surface: ProcessingStrip's existing Cancel button is now actually wired (`onCancel={processing ? onCancel : null}` in OutputColumn) and `cancelRunning` switches between abortRef / vectorizeAbortRef / batchAbortRef based on `processing.actionId`. | `src/App.jsx`, `src/components/OutputColumn.jsx` |
+| B3 | OS-aware mod key: new `src/platform.js` exports `modKeyLabel('K')` → "⌘K" on Mac, "Ctrl K" elsewhere. TopBar uses it instead of the hardcoded "⌘ K". | `src/platform.js` (NEW), `src/components/TopBar.jsx` |
+| B4 | STIX Two Text → **Fraunces** (variable serif, opsz 9..144, wght 400..700). Google Fonts import line + `--serif` token updated. Matches the design handoff spec which had been referenced but never shipped. | `src/index.css` |
+| B5 | Pill row rename: "Markdown" → "Source"; **Worksheet** lifted out of the pill cluster into its own `og-output-tools` group with a labeled button (it opens a modal, not a view — was confusing alongside Preview/Source/Equation/Sketches). | `src/components/OutputColumn.jsx`, `src/index.css` |
+| B6 | Filename rename affordance: the bare `<input>` next to the OUT.* num is now a click-to-edit display button with a pencil glyph that shows on hover/focus. Engages an inline input on click. | `src/components/OutputColumn.jsx`, `src/index.css` |
+| B7 | `:focus-visible` rings on every interactive token (`.og-pill`, `.og-tile`, `.og-session`, `.og-kbd-btn`, `.og-theme-cycle`, `.og-output-worksheet-btn`, `.og-output-rename-display`, `.og-export-menu-btn`, `.og-export-btn`, `.og-sketches-batch`, `.og-proc-cancel`, `.og-btn-primary`, `.og-btn-ghost`). 2px indigo ring, 2px offset, scoped to keyboard nav. | `src/index.css` |
+| B8 | `@media (prefers-reduced-motion: reduce)` global block at the bottom of `index.css` — kills scan line, sketch pulse, spinner rotation, toast slide, tile lift. Functional transitions stay. | `src/index.css` |
+
+**Verification:**
+- `npm run lint` → clean (one round-trip after react-hooks rules flagged sync `setState` in two effect bodies; both restructured).
+- `npm test` → **219/219 passing** across 26 files (was 239/239 across 28 — net –20 from the deleted mermaid + refine suites).
+- `npm run build` → green; pdf.worker stays code-split.
+
+**Manual smoke matrix (still owed by user):**
+
+1. **Vectorize abort (A1)** — upload PDF with 5+ sketches → `Vectorize All` → click Stop after 2 finish → DevTools Network shows the in-flight 3rd fetch aborted; sketches 4–5 stay `pending`; per-card Vectorize button works to resume one at a time.
+2. **Vectorize UI gate (A2)** — during single-sketch vectorize, click Extract Text → toast "Still finishing previous action…" (OCR_BUSY). After completion, all gates release.
+3. **Dropped actions (A3a)** — Source column shows 6 magic-action tiles (was 8). No Refine row. No Diagram or Refine pill in OutputColumn. Existing v4 compiles still open with their auto:image / auto:refinement blocks intact.
+4. **Raster export (A3b)** — image upload pre-extraction → click Save → picker shows `Original as PNG` + `Original as JPG`. 12-page PDF → picker shows `All pages as PNG (12)` + `All pages as JPG (12)`. Click triggers 12 sequential downloads with the Save label updating page-by-page.
+5. **Honest progress (B1)** — force a 90s extraction (large PDF) → at 95% cap the bar stops climbing, the strip shows `still working · 0:42 elapsed · large PDFs may take 1–3 min`, the percentage display swaps to elapsed time.
+6. **Cancel from anywhere (B2)** — start any action → ProcessingStrip Cancel button is visible and clickable; abort interrupts the in-flight fetch.
+7. **OS mod key (B3)** — boot on Windows: TopBar shows `Ctrl K`, not `⌘ K`. macOS still shows `⌘K`.
+8. **Fraunces (B4)** — inspect h1 / og-source-name / og-rendered prose: computed `font-family` resolves to Fraunces.
+9. **Pill rename + Worksheet (B5)** — Output mode pills read `Preview · Source · …`. Worksheet button sits visually OUTSIDE the pill cluster.
+10. **Filename rename (B6)** — hover the filename in the OUT header → pencil glyph appears → click → inline input takes focus → Enter commits, Esc reverts.
+11. **Focus rings (B7)** — Tab through every interactive surface; every focused element gets a 2px indigo ring.
+12. **Reduced motion (B8)** — system preference `prefers-reduced-motion: reduce` → no scan line, no sketch pulse, no toast slide.
+
+**Pending / carried over:**
+- **DOCX export bug** (user-reported) is parked. Repro: Save → DOCX with no pandoc on server → server returns `EXP_DOCX_NO_BINARY` but [exportDocx.js:32](src/exportDocx.js) routes through `EXP_DOCX_PANDOC_FAIL`, surfacing a developer-flavored toast. Picker still shows DOCX as a normal option with no `(mock)` cue. Fix surface: route the registry code correctly, add `(mock)` suffix in the picker when `/api/_status` flags it, optionally disable the row.
+- **Polish audit deferred items** (kept in plan file as a punch list): empty-session-list dead state, Welcome sample-load swallows errors silently, theme-cycle button shows current not next, action-tile glyphs (▦ ◇ ✎ ▣ → now ▦ ✎ after trim) still blur at small sizes, custom prompt has no Shift+Enter hint / no history / no preset chips, LanguagePill dropdown uses hardcoded inline `#fff/#ddd` (will look wrong on Ink theme), KaTeX failures color text red but no "1 equation didn't parse" badge, multi-SVG `All as PNG (5)` triggers Chromium permission prompt with no warning, Compile modal has no entrance animation, Sepia `--ink-faint` ≈ 3.6:1 fails AA, no spacing scale, action tiles + upload card + mode pills missing border-radius vs. spec, toast/inline-error/mock-badge use raw hex.
+- **Phase 13.3 top bar restyle** — next sub-phase of the design migration (brand chip + status pulse + capsule kbd). Tracked in `~/.claude/plans/go-thorugh-design-handoff-variant-b-refi-dapper-harbor.md`.
+- **Server endpoint cleanup**: `/api/save-drive`, `/api/email`, `/api/classroom/draft` UI buttons are gone but the endpoints remain in `server/index.js`. Decommission as a separate small chore.
+
+
 
 ## Latest pass — Carryover sprint: equation CSS + table onChange + langpill props + plan §3 gaps (2026-04-27)
 
