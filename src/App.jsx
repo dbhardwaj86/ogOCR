@@ -59,17 +59,18 @@ function readJSON(key, fallback) {
 // from v3 → v4 happens asynchronously after mount (see migrateLegacySessions
 // effect below) — synchronous migration would require blocking the initial
 // render on IDB writes.
-const SESSION_SCHEMA_VERSION = 4;
+const SESSION_SCHEMA_VERSION = 5;
 
 function migrateSession(s) {
   if (!s || typeof s !== 'object') return s;
   if (s.version === SESSION_SCHEMA_VERSION) return s;
-  // v1 → v2 → v3 → v4: leave existing text/svg/images in place synchronously.
+  // v1 → v2 → v3 → v4 → v5: leave existing text/svg/images in place synchronously.
   // `refinements` defaults to undefined and is populated lazily on the first
   // refine action. v3 → v4 image data migration is handled by the async
-  // migrateLegacySessions effect after first mount; we still stamp the
-  // version here so a session loaded from localStorage with no images
-  // (i.e. nothing to migrate) doesn't get re-touched.
+  // migrateLegacySessions effect after first mount; v4 → v5 just adds the
+  // optional `sketches` and `selectedSketchId` fields (default undefined),
+  // populated by the multi-sketch detect+vectorize flow. We stamp the
+  // version here so a session loaded from localStorage doesn't get re-touched.
   return { ...s, version: SESSION_SCHEMA_VERSION };
 }
 
@@ -447,6 +448,9 @@ function App() {
       text: '',
       svg: '',
       kind,
+      // v5 fields (optional — only populated by multi-sketch flow).
+      sketches: undefined,
+      selectedSketchId: undefined,
       version: SESSION_SCHEMA_VERSION,
     };
     setSessions(prev => [fresh, ...prev]);
@@ -647,6 +651,27 @@ function App() {
           updates.svg = data.svg;
           updates.text = '';
           hadResponse = true;
+        } else if (Array.isArray(data.sketches)) {
+          // Multi-sketch discovery path (Phase 15). The server detected 2+
+          // sketches in the upload and returned candidates with optional
+          // thumbnails (images only, PDFs omit them — Phase 2 follow-up).
+          // Per-card vectorization is handled lazily by vectorizeSketch().
+          // Cap thumbnail size by storing them inline; the localStorage
+          // circuit breaker handles overflow if a user accumulates many
+          // sketch sessions. selectedSketchId seeds the picker on first paint.
+          updates.sketches = data.sketches.map(s => ({
+            id: s.id,
+            description: s.description,
+            bbox: s.bbox,
+            page: s.page || 1,
+            thumbnail: s.thumbnail || null,
+            svg: '',
+            status: 'pending', // 'pending' | 'running' | 'done' | 'error'
+          }));
+          updates.selectedSketchId = data.sketches[0]?.id || null;
+          updates.svg = '';
+          updates.text = data.message || `Found ${data.sketches.length} sketches. Pick one to vectorize.`;
+          hadResponse = true;
         } else if (Array.isArray(data.images)) {
           // Native image rendering path (schema v2): keep the structured array
           // on `session.images`. RenderedDoc renders the grid natively; the
@@ -720,6 +745,101 @@ function App() {
     }
   }, [file, processing, activeSessionId, activeSession, createNewSession, updateSession, startProgress, finishProgress]);
 
+  // Phase 15 — vectorize a single detected sketch by id. Posts to
+  // /api/sketch-to-svg with the sketch's bbox + page; the server crops
+  // (image) or prompt-hints (PDF) before calling Gemini. Updates the
+  // session.sketches[i].status + svg in place. Cold-resume friendly: if
+  // `file` is no longer in memory (page reload), surfaces a toast and
+  // bails — the user will need to re-upload to continue vectorizing.
+  const vectorizeSketch = useCallback(async (sketchId) => {
+    if (!activeSessionId) return;
+    if (!file) {
+      showError('CAP_NO_FILE', {
+        message: 'Re-upload the original to vectorize this sketch.',
+        hint: 'Sketch detection ran on the previous upload; we need the file again to vectorize.',
+      });
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    const sketch = session?.sketches?.find(s => s.id === sketchId);
+    if (!sketch) return;
+    if (sketch.status === 'running') return;
+
+    // Mark running.
+    setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
+      ...s,
+      sketches: s.sketches.map(sk => sk.id === sketchId ? { ...sk, status: 'running' } : sk),
+    })));
+
+    try {
+      const formData = new FormData();
+      formData.append('files', file);
+      formData.append('bbox', JSON.stringify(sketch.bbox));
+      formData.append('page', String(sketch.page || 1));
+      const r = await fetch('/api/sketch-to-svg', { method: 'POST', body: formData });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || typeof data.svg !== 'string' || !data.svg.trim()) {
+        const entry = await errFromResponse(r);
+        const e = new Error(entry.message);
+        e.__registryEntry = entry;
+        throw e;
+      }
+      setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
+        ...s,
+        sketches: s.sketches.map(sk => sk.id === sketchId ? { ...sk, svg: data.svg, status: 'done' } : sk),
+      })));
+      showInfo(`Sketch ${sketchId} vectorized`);
+    } catch (err) {
+      console.error(err);
+      setSessions(prev => prev.map(s => s.id !== activeSessionId ? s : ({
+        ...s,
+        sketches: s.sketches.map(sk => sk.id === sketchId ? { ...sk, status: 'error' } : sk),
+      })));
+      const entry = err.__registryEntry || errFromException(err);
+      showError(entry.code, { message: entry.message, hint: entry.hint });
+    }
+  }, [file, activeSessionId, sessions]);
+
+  // Phase 15 — sequentially vectorize every pending sketch on the active
+  // session. Stops on the first error so the user can decide whether to
+  // retry. Sequential (per the plan default) to dodge the per-IP semaphore
+  // and avoid doubling Gemini spend on a click.
+  const vectorizeAllSketches = useCallback(async () => {
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session?.sketches) return;
+    for (const sketch of session.sketches) {
+      if (sketch.status === 'done') continue;
+      const before = Date.now();
+      await vectorizeSketch(sketch.id);
+      // After each await, re-read the latest session to check if the most
+      // recent vectorize errored — bail to let the user decide.
+      const after = sessions.find(s => s.id === activeSessionId);
+      const updatedSketch = after?.sketches?.find(sk => sk.id === sketch.id);
+      if (updatedSketch?.status === 'error') break;
+      // Tiny breather so the per-IP semaphore can release.
+      if (Date.now() - before < 200) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+  }, [sessions, activeSessionId, vectorizeSketch]);
+
+  // Phase 15 — promote a vectorized sketch to the main canvas. Clears the
+  // sketches list so the picker pill collapses; user can re-detect by
+  // clicking the Sketch action again.
+  const openSketch = useCallback((sketchId) => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    const sketch = session?.sketches?.find(s => s.id === sketchId);
+    if (!sketch?.svg) return;
+    updateSession(activeSessionId, {
+      svg: sketch.svg,
+      text: '',
+      kind: 'sketch',
+      sketches: undefined,
+      selectedSketchId: undefined,
+    });
+  }, [sessions, activeSessionId, updateSession]);
+
   // Queue runner: a multi-file drop enqueues into `src/queue.js`; the queue
   // calls back into here to run each file through the action endpoint. We
   // intentionally don't reuse `runAction` directly because the queue runner
@@ -781,6 +901,21 @@ function App() {
         if (data.svg) {
           updates.svg = data.svg;
           updates.text = '';
+          hadResponse = true;
+        } else if (Array.isArray(data.sketches)) {
+          // Multi-sketch discovery in queue-batch flow. Same shape as runAction.
+          updates.sketches = data.sketches.map(s => ({
+            id: s.id,
+            description: s.description,
+            bbox: s.bbox,
+            page: s.page || 1,
+            thumbnail: s.thumbnail || null,
+            svg: '',
+            status: 'pending',
+          }));
+          updates.selectedSketchId = data.sketches[0]?.id || null;
+          updates.svg = '';
+          updates.text = data.message || `Found ${data.sketches.length} sketches. Pick one to vectorize.`;
           hadResponse = true;
         } else if (Array.isArray(data.images)) {
           updates.images = data.images;
@@ -1030,6 +1165,9 @@ function App() {
             onDismissError={clearLastError}
             hasFile={!!file}
             sessionCount={sessions.length}
+            onVectorizeSketch={vectorizeSketch}
+            onVectorizeAllSketches={vectorizeAllSketches}
+            onOpenSketch={openSketch}
           />
         </ErrorBoundary>
       </main>

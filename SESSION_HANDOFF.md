@@ -1,14 +1,49 @@
 # Session Handoff — ogOCR Sprint Plan Execution
 
-**Last updated:** 2026-04-27 (post Ship Cleanup Sprint)
-**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md`
+**Last updated:** 2026-04-27 (post Multi-Sketch Detection sprint)
+**Plan file (latest pass):** `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` (Multi-Sketch Detection)
+**Plan file (prior — Ship Cleanup):** same path, repurposed (see commit history)
 **Plan file (3-sprint pass):** `C:\Users\abc\.claude\plans\we-will-work-on-fuzzy-teacup.md`
 **Source review:** [REVIEW_REPORT.md](REVIEW_REPORT.md)
 **Comparison report:** `..\_review_reports\COMPARISON.md` (4-codebase bake-off that picked ogOCR)
 
-Read **Latest pass — Ship Cleanup Sprint** first, then the **Pending user review** section, then the original plan if you need context.
+Read **Latest pass — Multi-Sketch Detection** first, then the prior passes, then the original plan if you need context.
 
-## Latest pass — Ship Cleanup Sprint (2026-04-27)
+## Latest pass — Multi-Sketch Detection (2026-04-27)
+
+**Why:** Real teaching documents often contain several sketches per page. The old `/api/sketch-to-svg` returned ONE SVG, leaving the user to re-upload or manually crop for each additional diagram. This pass lets Gemini detect every sketch in the upload, surface a picker, and lazy-vectorize each on demand — preserving the back-compat single-sketch UX.
+
+**What shipped:**
+
+| Layer | Change | Files |
+|---|---|---|
+| Server | `/api/sketch-to-svg` now polymorphic on `req.body.bbox`. **Discovery mode** (no bbox): JSON-mode prompt asks Gemini for every sketch in the doc, returns `{sketches:[{id, description, bbox, page, thumbnail?}]}` for 2+, falls through to vectorize for 1, errors `OCR_NO_SKETCH_FOUND` for 0. **Vectorize mode** (bbox present): crops via sharp (images) or hints prompt with bbox+page (PDFs), returns `{svg}`. | `server/index.js` |
+| Errors | New codes `OCR_NO_SKETCH_FOUND` (404, INFO) and `OCR_SKETCH_BBOX_INVALID` (400, ERROR) registered on both server and client. | `server/errors.js`, `src/errors/codes.js` |
+| Schema | Bumped `SESSION_SCHEMA_VERSION` 4 → 5. New optional fields: `sketches: [{id, description, bbox, page, thumbnail?, svg, status}]` and `selectedSketchId`. Migration is a no-op stamp (fields default undefined). | `src/App.jsx` |
+| State | New 4th branch in `runAction` + queue runner for `data.sketches`: stores candidates with `status: 'pending'`, seeds `selectedSketchId` to first card. New helpers `vectorizeSketch(id)`, `vectorizeAllSketches()` (sequential), `openSketch(id)` (promotes a vectorized sketch to the main canvas). | `src/App.jsx` |
+| UI | New conditional **Sketches (N)** pill in the Output column (rendered only when `session.sketches.length > 0`); auto-flips mode to `sketches` when a session FIRST acquires sketches; falls back to Preview if the user switches sessions. New `SketchesPicker` component renders cards with thumbnail (or placeholder for PDFs), description, page tag, status badge ('Vectorize' button → spinner → inline SVG preview → 'Open' CTA). Toolbar hosts "Vectorize All (N left)". | `src/components/OutputColumn.jsx`, `src/components/SketchesPicker.jsx` (NEW), `src/index.css` |
+| Copy | Sketch action hint changed from "Hand drawing → editable SVG" to "Detect & vectorize sketches" so users know it now handles multiple. | `src/magicActions.js` |
+| Tests | 12 new tests — 7 backend (discovery 0/1/2+, vectorize-with-bbox, bad-bbox in 3 forms) + 5 frontend (picker render, Vectorize click, Open click + SVG preview, Vectorize-All disabled-state, empty list). Total 170 → 182 passing. | `src/__tests__/smoke/sketch-and-images.test.js`, `src/__tests__/smoke/server.fixture.js` (mirrored prod logic), `src/__tests__/smoke/client-output.test.jsx` |
+
+**Verification:**
+- `npm run lint` → exits 0.
+- `npm test` → **182/182 passing** across 25 files (was 170/170; +12 new).
+- `npm run build` → clean.
+- `/api/_status` continues to report `gemini=real, docx=real`.
+
+**Known limitations (Phase-2 follow-up):**
+1. **PDF page rasterization on the server** — multi-sketch PDFs return picker cards without thumbnails (only descriptions + page tags + bbox). User must rely on the description to pick. Vectorization for PDFs uses prompt-based bbox hint rather than server-side cropping. Both items would benefit from a `pdfjs-dist` server render pass.
+2. **Cold-resume** (page reload after detection): the original file is lost from memory, so per-card vectorization shows a "re-upload to vectorize" toast instead of working silently. Acceptable for v1.
+3. **Sequential "Vectorize All"** — 5 sketches × ~30-60s/each = 2.5-5 min. UI shows per-card spinner; no top-of-picker progress bar yet.
+
+**Manual smoke matrix (still owed by user on http://192.168.1.13:5181):**
+- A. Single-sketch PDF — back-compat: SVG appears in Preview, no Sketches pill.
+- B. Multi-sketch PDF — Sketches (N) pill appears, mode auto-flips, picker shows N cards (description + page tag, no thumbnails). Click Vectorize → SVG appears on the card.
+- C. Multi-sketch image — same flow as B but cards show real cropped thumbnails.
+- D. Plain text page — toast "No sketches detected…" appears, mode unchanged.
+- E. Vectorize All on a 3-sketch upload — sequential progress, all 3 land as done.
+
+## Prior pass — Ship Cleanup Sprint (2026-04-27)
 
 **Why:** A four-codebase bake-off (ogOCR vs codex-OCR vs khanak-claude-OCR vs gemini-OCR) picked ogOCR as the codebase to invest in. This sprint closed the four gaps that stopped it from being ship-ready, then the three sibling codebases were retired. See `..\_review_reports\COMPARISON.md` for the full bake-off and `C:\Users\abc\.claude\plans\ok-brainstorm-to-get-vast-porcupine.md` for the gap-closure plan.
 

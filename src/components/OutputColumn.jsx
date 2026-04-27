@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import RenderedDoc, { detectMermaidBlock } from './RenderedDoc';
+import SketchesPicker from './SketchesPicker';
 import SourceDoc from './SourceDoc';
 import ProcessingStrip from './ProcessingStrip';
 import ExportBar from './ExportBar';
@@ -57,8 +58,11 @@ function OutputColumn({
   onRetry,
   onDismissError,
   sessionCount = 0,
+  onVectorizeSketch,
+  onVectorizeAllSketches,
+  onOpenSketch,
 }) {
-  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation'
+  const [mode, setMode] = useState('rendered'); // 'rendered' | 'source' | 'refine' | 'diagram' | 'equation' | 'sketches'
   // Tablet-portrait (641-880 px) collapsible source thumbnail. Default
   // collapsed so the canvas stays the focus; tapping the strip expands it.
   const [thumbExpanded, setThumbExpanded] = useState(false);
@@ -115,14 +119,42 @@ function OutputColumn({
   // markdown wrapping), so `kind === 'math'` is the canonical signal.
   const hasEquation = session?.kind === 'math';
 
+  // Phase 15 — Sketches pill is conditional: visible only when the active
+  // session has 2+ detected-but-not-yet-vectorized sketches (the multi-
+  // sketch path on /api/sketch-to-svg). Single-sketch sessions go through
+  // the back-compat `data.svg` branch and never populate this array.
+  const hasSketches = Array.isArray(session?.sketches) && session.sketches.length > 0;
+
+  // Phase 15 — auto-flip mode to 'sketches' when a session FIRST acquires
+  // sketches (so the user lands on the picker immediately after detection
+  // completes). Tracks the last-seen sketches length per session id; if it
+  // jumps from 0 → N>0, switch mode. Also resets when the active session
+  // changes so back-and-forth between sessions doesn't override the user's
+  // explicit pill choice.
+  const lastSeenSketchKey = useRef('');
+  useEffect(() => {
+    const key = `${session?.id || ''}:${session?.sketches?.length || 0}`;
+    if (key === lastSeenSketchKey.current) return;
+    const prevKey = lastSeenSketchKey.current;
+    lastSeenSketchKey.current = key;
+    const prevId = prevKey.split(':')[0];
+    const prevLen = Number(prevKey.split(':')[1] || 0);
+    const currLen = session?.sketches?.length || 0;
+    // Same session, count went from 0 → N>0 → auto-switch to sketches mode.
+    if (prevId === (session?.id || '') && prevLen === 0 && currLen > 0) {
+      setMode('sketches');
+    }
+  }, [session?.id, session?.sketches?.length]);
+
   // If the user picked the Refine pill but the session no longer has any
   // populated refinements (e.g. switched sessions), fall back to Preview.
-  // Same idea for Diagram / Equation: if the active session no longer
-  // qualifies, drop back to Preview rather than rendering an empty editor.
+  // Same idea for Diagram / Equation / Sketches: if the active session no
+  // longer qualifies, drop back to Preview rather than rendering empty UI.
   let effectiveMode = mode;
   if (effectiveMode === 'refine' && !hasRefinements) effectiveMode = 'rendered';
   if (effectiveMode === 'diagram' && !hasMermaid) effectiveMode = 'rendered';
   if (effectiveMode === 'equation' && !hasEquation) effectiveMode = 'rendered';
+  if (effectiveMode === 'sketches' && !hasSketches) effectiveMode = 'rendered';
 
   return (
     <section className="og-output">
@@ -171,6 +203,13 @@ function OutputColumn({
               onClick={() => setMode('equation')}
               title="Open the live LaTeX editor for this equation"
             >Equation</button>
+          )}
+          {hasSketches && (
+            <button
+              className={'og-pill og-pill-sketches' + (effectiveMode === 'sketches' ? ' is-active' : '')}
+              onClick={() => setMode('sketches')}
+              title="Pick a detected sketch to vectorize"
+            >Sketches ({session.sketches.length})</button>
           )}
           <button
             className={'og-pill og-pill-secondary' + (sessionCount < 2 ? ' is-dim' : '')}
@@ -273,6 +312,17 @@ function OutputColumn({
             images={session?.images}
             mode="equation"
             onChangeText={(next) => onUpdateSession && onUpdateSession({ text: next })}
+          />
+        )}
+        {effectiveMode === 'sketches' && (
+          <SketchesPicker
+            sketches={session?.sketches || []}
+            selectedId={session?.selectedSketchId}
+            onSelect={(id) => onUpdateSession && onUpdateSession({ selectedSketchId: id })}
+            onVectorize={onVectorizeSketch}
+            onVectorizeAll={onVectorizeAllSketches}
+            onOpen={onOpenSketch}
+            anyRunning={(session?.sketches || []).some(s => s.status === 'running')}
           />
         )}
       </div>

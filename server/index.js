@@ -543,6 +543,95 @@ app.post('/api/classroom/draft', (req, res) => {
   res.on('close', () => clearTimeout(timer));
 });
 
+// Multi-sketch helpers (Phase 15 — Multi-Sketch Detection).
+// /api/sketch-to-svg is now polymorphic on `req.body.bbox`:
+//   - no bbox → discovery mode: ask Gemini for every sketch in the doc.
+//                Auto-vectorize if exactly 1 found (back-compat: returns {svg}).
+//                Return {sketches:[...]} if 2+ found.
+//   - bbox present → vectorize mode: crop (image) or prompt-hint (PDF) and
+//                vectorize that one region. Returns {svg}.
+
+const SKETCH_VECTORIZE_PROMPT = `You are an expert graphic designer and educator. Convert the sketched teaching diagram into a clean, professional, black-and-white textbook-style vector graphic.
+Return ONLY valid raw SVG code.
+Do NOT wrap it in markdown code blocks like \`\`\`svg.
+Do NOT include any explanations or HTML outside the <svg> tag.`;
+
+const SKETCH_DISCOVERY_PROMPT = `Identify every hand-drawn sketch, teaching diagram, free-body diagram, circuit, ray diagram, geometric figure, or graph in this document. Ignore photographs, printed figures, and pure text blocks.
+Return a JSON array of objects. Each object MUST have:
+- "description": short label (e.g., "free-body diagram of block on incline").
+- "boundingBox": array of 4 numbers [ymin, xmin, ymax, xmax], normalized 0-1000.
+- "page": 1-based page number (use 1 for single images).
+If no sketches are present, return an empty array: [].`;
+
+// Parse + validate a bbox string|array from req.body. Returns the array or null.
+function parseSketchBbox(raw) {
+  if (raw == null || raw === '') return null;
+  let arr = raw;
+  if (typeof raw === 'string') {
+    try { arr = JSON.parse(raw); } catch { return null; }
+  }
+  if (!Array.isArray(arr) || arr.length !== 4) return null;
+  if (!arr.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1000)) return null;
+  if (arr[2] <= arr[0] || arr[3] <= arr[1]) return null;
+  return arr;
+}
+
+function parseSketchPage(raw) {
+  if (raw == null || raw === '') return 1;
+  const n = typeof raw === 'string' ? Number(raw) : raw;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+// Crop an image buffer to a bbox (normalized 0-1000). Returns a new file-like
+// object suitable for generateContentFromUpload, or the original file if
+// cropping isn't applicable / fails.
+async function cropImageFileToBbox(file, bbox) {
+  if (!file?.mimetype?.startsWith('image/')) return file;
+  try {
+    const meta = await sharp(file.buffer).metadata();
+    const { width, height } = meta;
+    if (!width || !height) return file;
+    const ymin = bbox[0] / 1000, xmin = bbox[1] / 1000, ymax = bbox[2] / 1000, xmax = bbox[3] / 1000;
+    const left = Math.max(0, Math.floor(xmin * width));
+    const top = Math.max(0, Math.floor(ymin * height));
+    const extractWidth = Math.min(width - left, Math.floor((xmax - xmin) * width));
+    const extractHeight = Math.min(height - top, Math.floor((ymax - ymin) * height));
+    if (extractWidth <= 0 || extractHeight <= 0) return file;
+    const cropped = await sharp(file.buffer)
+      .extract({ left, top, width: extractWidth, height: extractHeight })
+      .png()
+      .toBuffer();
+    return {
+      ...file,
+      buffer: cropped,
+      mimetype: 'image/png',
+      size: cropped.length,
+      originalname: (file.originalname || 'sketch') + '.crop.png',
+    };
+  } catch (err) {
+    console.error('[sketch] crop failed, falling back to full image:', err.message);
+    return file;
+  }
+}
+
+// Vectorize a single sketch (the existing single-sketch path, generalized to
+// accept an optional bbox). Returns the cleaned SVG string.
+async function vectorizeSingleSketch(file, bbox, page) {
+  const proModel = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+  let workingFile = file;
+  let prompt = SKETCH_VECTORIZE_PROMPT;
+  if (bbox) {
+    if (file.mimetype.startsWith('image/')) {
+      workingFile = await cropImageFileToBbox(file, bbox);
+    } else {
+      prompt = `${SKETCH_VECTORIZE_PROMPT}\n\nFocus on the sketch on page ${page} within the bounding box [${bbox.join(', ')}] (normalized 0-1000, [ymin, xmin, ymax, xmax]). Vectorize ONLY that sketch — ignore everything else.`;
+    }
+  }
+  const result = await generateContentFromUpload(proModel, prompt, workingFile);
+  const raw = (await result.response).text();
+  return raw.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
+}
+
 app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.any(), async (req, res) => {
   try {
     const file = pickUploadedFile(req);
@@ -552,20 +641,112 @@ app.post('/api/sketch-to-svg', ocrLimiter, uploadSemaphore, uploadArray.any(), a
       return sendError(res, 'CAP_BAD_MIME', { message: 'Unsupported file type — upload an image or PDF.' });
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+    // Vectorize mode: caller passed bbox (and optionally page). Crop & vectorize.
+    if (req.body && (req.body.bbox != null && req.body.bbox !== '')) {
+      const bbox = parseSketchBbox(req.body.bbox);
+      if (!bbox) return sendError(res, 'OCR_SKETCH_BBOX_INVALID');
+      const page = parseSketchPage(req.body.page);
+      const svg = await vectorizeSingleSketch(file, bbox, page);
+      return res.json({ svg });
+    }
 
-    const prompt = `You are an expert graphic designer and educator. Examine all pages of the provided document. Find the sketched teaching diagram (no matter which page it is on) and convert it into a clean, professional, black-and-white textbook-style vector graphic.
-    Return ONLY valid raw SVG code.
-    Do NOT wrap it in markdown code blocks like \`\`\`svg.
-    Do NOT include any explanations or HTML outside the <svg> tag.`;
+    // Discovery mode: ask Gemini for every sketch in the doc.
+    const detectModel = genAI.getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      generationConfig: { responseMimeType: 'application/json' },
+    });
+    const detectResult = await generateContentFromUpload(detectModel, SKETCH_DISCOVERY_PROMPT, file);
+    let detectJson = (await detectResult.response).text();
+    detectJson = detectJson.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
 
-    const result = await generateContentFromUpload(model, prompt, file);
-    let svgText = (await result.response).text();
-    svgText = svgText.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
+    let rawList;
+    try { rawList = JSON.parse(detectJson); }
+    catch {
+      console.error('[sketch] discovery JSON parse failed. First 200 chars:', detectJson.substring(0, 200));
+      return sendError(res, 'OCR_MALFORMED_JSON');
+    }
+    if (!Array.isArray(rawList)) {
+      console.error('[sketch] discovery did not return an array, got:', typeof rawList);
+      return sendError(res, 'OCR_MALFORMED_JSON', { message: 'Model did not return an array.' });
+    }
 
-    res.json({ svg: svgText });
+    const candidates = rawList.filter(b =>
+      b && typeof b.description === 'string' &&
+      Array.isArray(b.boundingBox) && b.boundingBox.length === 4 &&
+      b.boundingBox.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1000) &&
+      b.boundingBox[2] > b.boundingBox[0] &&
+      b.boundingBox[3] > b.boundingBox[1]
+    );
+
+    if (candidates.length === 0) return sendError(res, 'OCR_NO_SKETCH_FOUND');
+
+    // Back-compat: exactly one sketch → auto-vectorize, return {svg} just like
+    // the legacy single-sketch flow. UX unchanged for single-sketch documents.
+    if (candidates.length === 1) {
+      const c = candidates[0];
+      const page = Number.isFinite(c.page) && c.page >= 1 ? Math.floor(c.page) : 1;
+      const svg = await vectorizeSingleSketch(file, c.boundingBox, page);
+      return res.json({ svg });
+    }
+
+    // Multi-sketch path: build the picker payload. For images, attach a
+    // server-side cropped PNG thumbnail; for PDFs, no thumbnail (per-page
+    // rasterization is Phase 2 — see CLAUDE.md outstanding issues).
+    const sketches = [];
+    if (file.mimetype.startsWith('image/')) {
+      const meta = await sharp(file.buffer).metadata();
+      const { width, height } = meta;
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        const bbox = c.boundingBox;
+        const page = Number.isFinite(c.page) && c.page >= 1 ? Math.floor(c.page) : 1;
+        let thumbnail = null;
+        try {
+          if (width && height) {
+            const ymin = bbox[0] / 1000, xmin = bbox[1] / 1000, ymax = bbox[2] / 1000, xmax = bbox[3] / 1000;
+            const left = Math.max(0, Math.floor(xmin * width));
+            const top = Math.max(0, Math.floor(ymin * height));
+            const extractWidth = Math.min(width - left, Math.floor((xmax - xmin) * width));
+            const extractHeight = Math.min(height - top, Math.floor((ymax - ymin) * height));
+            if (extractWidth > 0 && extractHeight > 0) {
+              const cropped = await sharp(file.buffer)
+                .extract({ left, top, width: extractWidth, height: extractHeight })
+                .resize({ width: 320, height: 320, fit: 'inside', withoutEnlargement: true })
+                .png()
+                .toBuffer();
+              thumbnail = `data:image/png;base64,${cropped.toString('base64')}`;
+            }
+          }
+        } catch (cropErr) {
+          console.warn(`[sketch] thumbnail ${i + 1} failed:`, cropErr.message);
+        }
+        sketches.push({
+          id: i + 1,
+          description: c.description,
+          bbox,
+          page,
+          thumbnail,
+        });
+      }
+    } else {
+      // PDF: no per-page rasterization yet. Picker shows description + bbox
+      // tag + page number; user clicks Vectorize and the bbox-aware vectorize
+      // call returns an SVG.
+      candidates.forEach((c, i) => {
+        const page = Number.isFinite(c.page) && c.page >= 1 ? Math.floor(c.page) : 1;
+        sketches.push({
+          id: i + 1,
+          description: c.description,
+          bbox: c.boundingBox,
+          page,
+          thumbnail: null,
+        });
+      });
+    }
+
+    res.json({ sketches, message: `Found ${sketches.length} sketches.` });
   } catch (error) {
-    console.error("Sketch to SVG Error:", error);
+    console.error('Sketch to SVG Error:', error);
     sendModelError(res, error, 'Failed to convert sketch to SVG');
   }
 });

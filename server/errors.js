@@ -15,6 +15,8 @@ export const ERRORS = Object.freeze({
   OCR_INTERNAL: { http: 500, message: 'Internal server error.', hint: 'Tap Retry.' },
   OCR_BAD_PROMPT: { http: 400, message: 'Prompt is invalid.', hint: 'Try a shorter prompt.' },
   OCR_SAFETY_BLOCK: { http: 400, message: 'Content was blocked by safety filters.', hint: 'Try cropping to just the text.' },
+  OCR_NO_SKETCH_FOUND: { http: 404, message: 'No sketches detected in this document.', hint: 'Try a clearer scan or upload a region that contains a hand-drawn diagram.' },
+  OCR_SKETCH_BBOX_INVALID: { http: 400, message: 'Bad sketch region.', hint: 'Refresh the page and try selecting the sketch again.' },
 
   EXP_EMAIL_BAD_RECIPIENT: { http: 400, message: 'Invalid email address.', hint: 'Check the spelling.' },
   EXP_EMAIL_NETWORK: { http: 502, message: 'Email server unreachable.', hint: 'Try again in a moment.' },

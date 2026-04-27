@@ -111,14 +111,69 @@ export function buildApp(opts = {}) {
     }
   });
 
+  // Mirror Phase 15 prod: /api/sketch-to-svg is polymorphic on req.body.bbox.
+  //  - bbox present → vectorize that one sketch (returns {svg}).
+  //  - no bbox → discovery: parse JSON list. 0 → OCR_NO_SKETCH_FOUND.
+  //                                          1 → auto-vectorize, returns {svg}.
+  //                                          2+ → returns {sketches: [...]}.
+  function parseBboxStub(raw) {
+    if (raw == null || raw === '') return null;
+    let arr = raw;
+    if (typeof raw === 'string') {
+      try { arr = JSON.parse(raw); } catch { return null; }
+    }
+    if (!Array.isArray(arr) || arr.length !== 4) return null;
+    if (!arr.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1000)) return null;
+    if (arr[2] <= arr[0] || arr[3] <= arr[1]) return null;
+    return arr;
+  }
+
   app.post('/api/sketch-to-svg', uploadArray.any(), async (req, res) => {
     try {
       const file = pickUploadedFile(req);
       if (!file) return sendError(res, 'CAP_NO_FILE');
-      let svgText = await callModel('svg');
-      // Mirror the prod fence-stripping
-      svgText = svgText.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
-      res.json({ svg: svgText });
+
+      // Vectorize branch.
+      if (req.body && req.body.bbox != null && req.body.bbox !== '') {
+        const bbox = parseBboxStub(req.body.bbox);
+        if (!bbox) return sendError(res, 'OCR_SKETCH_BBOX_INVALID');
+        let svgText = await callModel('svg');
+        svgText = svgText.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
+        return res.json({ svg: svgText });
+      }
+
+      // Discovery branch.
+      let jsonText = await callModel('json');
+      jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
+      let raw;
+      try { raw = JSON.parse(jsonText); }
+      catch { return sendError(res, 'OCR_MALFORMED_JSON'); }
+      if (!Array.isArray(raw)) {
+        return sendError(res, 'OCR_MALFORMED_JSON', { message: 'Model did not return an array.' });
+      }
+      const candidates = raw.filter(b =>
+        b && typeof b.description === 'string' &&
+        Array.isArray(b.boundingBox) && b.boundingBox.length === 4 &&
+        b.boundingBox.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1000) &&
+        b.boundingBox[2] > b.boundingBox[0] &&
+        b.boundingBox[3] > b.boundingBox[1]
+      );
+      if (candidates.length === 0) return sendError(res, 'OCR_NO_SKETCH_FOUND');
+      if (candidates.length === 1) {
+        let svgText = await callModel('svg');
+        svgText = svgText.replace(/^```svg\n?/, '').replace(/\n?```$/, '').trim();
+        return res.json({ svg: svgText });
+      }
+      // Multi-sketch path: build picker payload (no thumbnail crop in fixture
+      // — production uses sharp, but tests just assert shape).
+      const sketches = candidates.map((c, i) => ({
+        id: i + 1,
+        description: c.description,
+        bbox: c.boundingBox,
+        page: Number.isFinite(c.page) && c.page >= 1 ? Math.floor(c.page) : 1,
+        thumbnail: file.mimetype.startsWith('image/') ? `data:image/png;base64,STUB${i}` : null,
+      }));
+      return res.json({ sketches, message: `Found ${sketches.length} sketches.` });
     } catch (error) {
       sendError(res, 'OCR_INTERNAL', { cause: error?.message || error });
     }

@@ -61,7 +61,7 @@ export const MAGIC_ACTIONS = [
   },
   {
     id: 'sketch', group: 'Visual', label: 'Sketch → SVG',
-    hint: 'Hand drawing → editable SVG',
+    hint: 'Detect & vectorize sketches',
     glyph: '✎', key: 'S', tier: 'overflow',
     endpoint: '/api/sketch-to-svg',
     prompt: null,

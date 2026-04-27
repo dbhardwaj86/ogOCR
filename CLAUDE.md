@@ -4,15 +4,16 @@
 >
 > That file is the living index of every multi-step pass: what shipped, what's pending, what to verify next. The architecture notes below stay accurate, but anything about active or recently-shipped work belongs in the handoff.
 
-## Latest changes (2026-04-27 Ship Cleanup Sprint)
+## Latest changes (2026-04-27 Multi-Sketch Detection + Ship Cleanup Sprint)
 
 These differ from the architecture notes below; if there's a conflict, this section wins:
 
+- **`/api/sketch-to-svg` is now polymorphic on `req.body.bbox`** (Phase 15). No bbox → discovery mode: JSON-mode prompt returns every detected sketch. 0 found → `OCR_NO_SKETCH_FOUND`. 1 found → auto-vectorize, returns `{svg}` (back-compat). 2+ found → returns `{sketches:[{id, description, bbox, page, thumbnail?}]}` and the frontend renders a picker. With a bbox, server crops (image) or prompt-hints (PDF) and returns `{svg}` for that one region. New session schema fields: `sketches`, `selectedSketchId` (v5). Frontend helpers in `src/App.jsx`: `vectorizeSketch(id)`, `vectorizeAllSketches()`, `openSketch(id)`. Picker UI in `src/components/SketchesPicker.jsx` rendered when `mode === 'sketches'`.
 - **`npm start`** now serves the built `dist/` + the API on a single port — production hosting path. `npm run dev` still does the dual Vite + Express dance for local development.
 - **PDFs route through Gemini Files API.** `server/geminiUpload.js` exposes `buildGeminiUploadParts(file, { fileManager })` — PDFs upload once, get a `fileUri`, are cleaned up after generateContent. Images still go inline base64. The `generateContentFromUpload(model, prompt, file)` helper in `server/index.js` is the single entry point.
 - **`xlsx` was replaced by `exceljs`** in `src/components/TableBlock.jsx` (still lazy-imported on the export click).
 - **EADDRINUSE now fails loud** — `server.on('error', ...)` exits code 1 with a clear message instead of the silent-exit-while-Vite-stays-up bug documented in the Gotchas section.
-- **Test runner exists** — Vitest. `npm test` is the canonical command. Architecture note below saying "There is no test runner" is wrong; ignore it (the suite is at 170 passing across 25 files).
+- **Test runner exists** — Vitest. `npm test` is the canonical command. Architecture note below saying "There is no test runner" is wrong; ignore it (the suite is at 182 passing across 25 files).
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -70,7 +71,7 @@ The action table is the wire-compat contract with the backend and lives in `src/
 ### Per-endpoint Gemini model split
 The code uses different models per endpoint:
 - `/api/extract` → `gemini-2.5-flash` (cheap path for the common "give me text" case).
-- `/api/sketch-to-svg` → `gemini-2.5-pro`, instructed to return raw SVG; the handler also strips stray ` ```svg ` fences in case the model ignores the instruction.
+- `/api/sketch-to-svg` → **two model calls** (Phase 15): first a `gemini-2.5-pro` JSON-mode discovery pass to enumerate every sketch in the doc (`{description, boundingBox, page}`), then a `gemini-2.5-pro` SVG-mode vectorize pass per sketch the user picks. Discovery is automatic on every upload; if exactly 1 sketch is found, the vectorize call fires immediately and the route returns `{svg}` (back-compat). 2+ sketches → returns `{sketches:[...]}` and the user vectorizes them lazily via `vectorizeSketch(id)` from `App.jsx` (each one calls back into `/api/sketch-to-svg` with `bbox` + `page` form fields). The SVG-mode response is fence-stripped for stray ` ```svg ` wrappers.
 - `/api/extract-images` → `gemini-2.5-pro` with `responseMimeType: "application/json"`. Returns a list of `{description, boundingBox: [ymin,xmin,ymax,xmax]}` (0–1000 normalized). For images the handler crops via `sharp`; for PDFs it returns descriptions only (no PDF-page rasterization yet).
 
 Do **not** use `gemini-1.5-pro` — it 404s in this workspace. The Gemini timeout is 10 minutes (`GEMINI_TIMEOUT_MS` in `server/index.js`) — large multi-page PDFs routinely take 1–3 minutes.
@@ -136,6 +137,6 @@ Phases 0–11 from the migration plan have landed (secrets, CORS, bind, DOMPurif
 Carried-over Phase 12 backlog:
 
 1. **Real Classroom / Email / share-link integrations** — Classroom is still a pure mock; Email is SMTP-only (no Gmail OAuth); the share-link button just copies `window.location.href`. Each needs its own OAuth or backend.
-2. **PDF page rasterization** in `/api/extract-images` — the handler returns descriptions only for PDFs.
+2. **PDF page rasterization** in `/api/extract-images` AND `/api/sketch-to-svg` — both handlers fall back to descriptions-only / prompt-hint (respectively) for PDF inputs because there's no server-side per-page render. `pdfjs-dist` is currently allowed only on the preview-thumbnail path (`UploadConfirmModal`, `SourcePreview`); expanding it to the server would let the multi-sketch picker show real cropped thumbnails for PDF inputs and the vectorize path crop the region precisely instead of hinting via prompt. Phase-2 follow-up.
 3. **Per-token confidence** from Gemini — would unlock the Diff pill and the `CONF` source tablet.
 4. **Browser idle-connection cap** — if a Gemini request actually runs the full 10-minute timeout, browsers/proxies can drop the connection at ~5 min. Untested edge case; the fix is a job-queue pattern (POST returns a job id, client polls).

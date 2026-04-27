@@ -12,6 +12,7 @@ import { render, cleanup } from '@testing-library/react';
 import { sanitizeSvg } from '../../svgSanitize.js';
 import WorksheetBuilder from '../../components/WorksheetBuilder.jsx';
 import RenderedDoc from '../../components/RenderedDoc.jsx';
+import SketchesPicker from '../../components/SketchesPicker.jsx';
 
 afterEach(() => cleanup());
 
@@ -108,5 +109,62 @@ describe('SMOKE RenderedDoc — KaTeX throwOnError:false', () => {
         text: '', svg: '', images: null, mode: 'rendered', onChangeText: () => {},
       }));
     }).not.toThrow();
+  });
+});
+
+describe('SMOKE SketchesPicker — Phase 15', () => {
+  const sketchA = { id: 1, description: 'free-body diagram', bbox: [50, 50, 400, 400], page: 1, thumbnail: 'data:image/png;base64,XXX', svg: '', status: 'pending' };
+  const sketchB = { id: 2, description: 'circuit diagram',   bbox: [500, 500, 900, 900], page: 1, thumbnail: null, svg: '', status: 'pending' };
+  const sketchDone = { id: 3, description: 'ray diagram', bbox: [10, 10, 200, 200], page: 2, thumbnail: 'data:image/png;base64,YYY', svg: '<svg viewBox="0 0 1 1"><rect/></svg>', status: 'done' };
+
+  it('Renders one card per sketch', () => {
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches: [sketchA, sketchB], selectedId: 1, onSelect: () => {}, onVectorize: () => {}, onVectorizeAll: () => {}, onOpen: () => {}, anyRunning: false,
+    }));
+    const cards = container.querySelectorAll('.og-sketch-card');
+    console.log(`[smoke] SketchesPicker | cards=${cards.length}`);
+    expect(cards.length).toBe(2);
+    expect(container.textContent).toContain('free-body diagram');
+    expect(container.textContent).toContain('circuit diagram');
+  });
+
+  it('Pending card shows Vectorize button; clicking it calls onVectorize(id)', () => {
+    let lastId = null;
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches: [sketchA], selectedId: 1, onSelect: () => {}, onVectorize: (id) => { lastId = id; }, onVectorizeAll: () => {}, onOpen: () => {}, anyRunning: false,
+    }));
+    const btn = Array.from(container.querySelectorAll('button')).find(b => b.textContent.trim() === 'Vectorize');
+    expect(btn).toBeTruthy();
+    btn.click();
+    expect(lastId).toBe(1);
+  });
+
+  it('Done card shows Open button + inline SVG preview', () => {
+    let opened = null;
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches: [sketchDone], selectedId: null, onSelect: () => {}, onVectorize: () => {}, onVectorizeAll: () => {}, onOpen: (id) => { opened = id; }, anyRunning: false,
+    }));
+    const openBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent.trim() === 'Open');
+    expect(openBtn).toBeTruthy();
+    openBtn.click();
+    expect(opened).toBe(3);
+    // Inline SVG preview should be present
+    expect(container.querySelector('.og-sketch-card-svg svg')).toBeTruthy();
+  });
+
+  it('Vectorize All button disabled when anyRunning', () => {
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches: [sketchA, { ...sketchB, status: 'running' }], selectedId: null, onSelect: () => {}, onVectorize: () => {}, onVectorizeAll: () => {}, onOpen: () => {}, anyRunning: true,
+    }));
+    const batch = Array.from(container.querySelectorAll('button')).find(b => /Vectorize All/.test(b.textContent));
+    expect(batch).toBeTruthy();
+    expect(batch.disabled).toBe(true);
+  });
+
+  it('Empty sketches list renders nothing', () => {
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches: [], selectedId: null, onSelect: () => {}, onVectorize: () => {}, onVectorizeAll: () => {}, onOpen: () => {}, anyRunning: false,
+    }));
+    expect(container.querySelector('.og-sketches-grid')).toBeNull();
   });
 });

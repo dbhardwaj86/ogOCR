@@ -733,6 +733,117 @@ kbd, code { font-family: var(--mono); }
   font-size: 0.9em; color: var(--accent-ink);
 }
 
+/* ===================================================================
+   Multi-sketch picker (Phase 15). Mirrors `.og-image-grid` but cards
+   carry status + actions. Lives inside `.og-rendered--sketches`.
+   =================================================================== */
+.og-rendered--sketches { max-width: 920px; }
+.og-sketches-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 8px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--rule);
+}
+.og-sketches-runner {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--accent); letter-spacing: 0.16em;
+}
+.og-sketches-batch {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.06em; padding: 6px 12px;
+  border: 1px solid var(--accent); color: var(--accent-ink);
+  border-radius: var(--r-chip); background: var(--bg-card);
+  cursor: pointer; transition: background var(--tx-fast);
+}
+.og-sketches-batch:hover:not(:disabled) { background: var(--accent-soft); }
+.og-sketches-batch:disabled { opacity: 0.45; cursor: not-allowed; }
+.og-sketches-help {
+  font-family: var(--serif); font-size: 13px; font-style: italic;
+  color: var(--ink-faint); margin: 0 0 18px;
+}
+.og-sketches-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 18px;
+}
+.og-sketch-card {
+  display: flex; flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-card);
+  padding: 12px; margin: 0;
+  cursor: pointer; transition: border-color var(--tx-fast), box-shadow var(--tx-fast);
+}
+.og-sketch-card:hover, .og-sketch-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+  outline: none;
+}
+.og-sketch-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.og-sketch-card.is-running { border-color: var(--accent); }
+.og-sketch-card.is-done { background: var(--bg-tint); }
+.og-sketch-card.is-error { border-color: oklch(0.55 0.18 25); }
+.og-sketch-card-thumb {
+  position: relative;
+  width: 100%; aspect-ratio: 4 / 3;
+  background: var(--bg-deep);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-tile);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 10px;
+}
+.og-sketch-card-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.og-sketch-card-svg { width: 100%; height: 100%; padding: 8px; display: flex; align-items: center; justify-content: center; }
+.og-sketch-card-svg svg { max-width: 100%; max-height: 100%; }
+.og-sketch-card-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  color: var(--ink-faint);
+}
+.og-sketch-card-placeholder-glyph { font-family: var(--serif); font-size: 36px; }
+.og-sketch-card-placeholder-tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; }
+.og-sketch-card-overlay {
+  position: absolute; inset: 0;
+  background: oklch(1 0 0 / 0.78);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px;
+}
+.og-sketch-card-spinner {
+  display: inline-block; font-size: 18px; color: var(--accent);
+  animation: og-sketch-pulse 1.2s ease-in-out infinite;
+}
+@keyframes og-sketch-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+.og-sketch-card-overlay-text {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--accent-ink);
+}
+.og-sketch-card-caption { display: flex; flex-direction: column; gap: 6px; }
+.og-sketch-card-id {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.og-sketch-card-desc {
+  font-family: var(--serif); font-size: 14px; line-height: 1.4;
+  color: var(--ink);
+}
+.og-sketch-card-actions { margin-top: 4px; }
+.og-sketch-card-cta {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  padding: 6px 14px; border: 1px solid var(--accent);
+  background: var(--accent); color: var(--bg-card);
+  border-radius: var(--r-chip); cursor: pointer;
+  transition: opacity var(--tx-fast);
+}
+.og-sketch-card-cta:disabled { opacity: 0.45; cursor: not-allowed; }
+.og-sketch-card.is-done .og-sketch-card-cta {
+  background: var(--bg-card); color: var(--accent-ink);
+}
+
 /* source mode (editable) */
 .og-source-doc {
   display: block; width: 100%;
