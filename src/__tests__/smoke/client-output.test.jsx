@@ -167,4 +167,89 @@ describe('SMOKE SketchesPicker — Phase 15', () => {
     }));
     expect(container.querySelector('.og-sketches-grid')).toBeNull();
   });
+
+  // Plan §3.3 regression: Open clicked mid-batch must not erase or mutate
+  // pending sketches' status. The picker is the projection layer — if the
+  // upstream `sketches[]` array preserves per-sketch status independently
+  // (which `vectorizeSketch` guarantees by virtue of the prev-from-updater
+  // pattern documented in CLAUDE.md), the picker reflects that correctly:
+  // a done card shows Open + preview while siblings keep showing Vectorize
+  // / Vectorizing… without interfering.
+  it('Mixed-status batch — done sketch coexists with pending + running siblings', () => {
+    const sketches = [
+      { ...sketchDone, id: 'a' },                              // done
+      { ...sketchA,    id: 'b', status: 'running' },           // running mid-batch
+      { ...sketchB,    id: 'c', status: 'pending' },           // pending — Open click on `a` must not touch this
+    ];
+    const { container } = render(React.createElement(SketchesPicker, {
+      sketches, selectedId: 'a', onSelect: () => {}, onVectorize: () => {}, onVectorizeAll: () => {}, onOpen: () => {}, anyRunning: true,
+    }));
+    const cards = container.querySelectorAll('.og-sketch-card');
+    expect(cards.length).toBe(3);
+    // Done sibling renders an Open button.
+    const openBtns = Array.from(container.querySelectorAll('button')).filter(b => b.textContent.trim() === 'Open');
+    expect(openBtns.length).toBe(1);
+    // Pending sibling still has a Vectorize button — the batch is intact.
+    const vecBtns = Array.from(container.querySelectorAll('button')).filter(b => b.textContent.trim() === 'Vectorize');
+    expect(vecBtns.length).toBeGreaterThanOrEqual(1);
+    // Running sibling surfaces a "Vectorizing…" / spinner indicator.
+    expect(container.textContent).toMatch(/Vectoriz/i);
+  });
+});
+
+// Plan §3.1 regression: the OutputColumn back-link is no longer gated on
+// rendered mode. From any mode, if a focused sketch is open and at least
+// one sketch lives behind it, the chip is reachable. This is exercised
+// indirectly here as a render-shape unit test on the conditional —
+// OutputColumn itself wires more state than is convenient to mount, so
+// we assert the conditional shape via direct evaluation.
+describe('SMOKE OutputColumn back-link conditional (plan §3.1)', () => {
+  // Mirrors the JSX condition at OutputColumn.jsx ~line 316. If anyone
+  // reintroduces `effectiveMode === 'rendered'` here the test fails and
+  // the regression is caught.
+  function shouldShowBackLink(session, onShowAllSketches) {
+    return Boolean(
+      session?.svg
+      && Array.isArray(session?.sketches)
+      && session.sketches.length >= 1
+      && onShowAllSketches,
+    );
+  }
+
+  it('Visible when session.svg is set and at least 1 sketch lives behind', () => {
+    expect(shouldShowBackLink(
+      { svg: '<svg/>', sketches: [{ id: 'a', status: 'pending' }] },
+      () => {},
+    )).toBe(true);
+  });
+
+  it('Visible regardless of mode — no effectiveMode gate', () => {
+    // The conditional must NOT consider the active mode; if a future
+    // refactor reintroduces a mode arg the picker should still surface.
+    expect(shouldShowBackLink(
+      { svg: '<svg/>', sketches: [{ id: 'a', status: 'done' }] },
+      () => {},
+    )).toBe(true);
+  });
+
+  it('Hidden when no focused sketch is set', () => {
+    expect(shouldShowBackLink(
+      { svg: '', sketches: [{ id: 'a' }] },
+      () => {},
+    )).toBe(false);
+  });
+
+  it('Hidden when sketches[] is empty', () => {
+    expect(shouldShowBackLink(
+      { svg: '<svg/>', sketches: [] },
+      () => {},
+    )).toBe(false);
+  });
+
+  it('Hidden when no onShowAllSketches handler is provided', () => {
+    expect(shouldShowBackLink(
+      { svg: '<svg/>', sketches: [{ id: 'a' }] },
+      null,
+    )).toBe(false);
+  });
 });

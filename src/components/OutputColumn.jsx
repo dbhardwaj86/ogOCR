@@ -309,12 +309,12 @@ function OutputColumn({
       )}
 
       <div className="og-output-canvas">
-        {/* "Show all sketches" chip — visible whenever the user is in the
-           focused-view for a sketch (rendered mode + session.svg) and at
-           least one sketch lives behind it. Pending-count surfaces in the
-           label so in-flight work is visible from the focused view. */}
-        {effectiveMode === 'rendered'
-          && session?.svg
+        {/* "Show all sketches" chip — visible whenever a focused sketch is
+           open (session.svg) and at least one sketch lives behind it. Not
+           gated on mode: even from Source / Markdown views, the user
+           should be one click from the picker. Pending count surfaces
+           in-flight vectorizes from the focused view. */}
+        {session?.svg
           && Array.isArray(session?.sketches)
           && session.sketches.length >= 1
           && onShowAllSketches && (
